@@ -19,10 +19,14 @@ import { OrganisationPage } from './pages/Organisation';
 import { ProfilePage } from './pages/Profile';
 import { AnalyticsPage } from './pages/Analytics';
 import { CalculatorPage } from './pages/Calculator';
+import { TasksPage } from './pages/Tasks';
+import { NotificationsPage } from './pages/Notifications';
+import { FeedbackPage } from './pages/Feedback';
+import { DepartmentPage } from './pages/Department';
 
 function CoreOnly({ children }: { children: ReactNode }) {
-  const { isCore } = useMe();
-  return isCore ? <>{children}</> : <Navigate to="/" replace />;
+  const { can } = useMe();
+  return can.isCore ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 function Gate() {
@@ -37,10 +41,15 @@ function Gate() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<DashboardPage />} />
-          <Route path="activities" element={<ActivitiesPage />} />
-          <Route path="activities/new" element={<CoreOnly><ActivityFormPage /></CoreOnly>} />
+          <Route path="activities" element={<ActivitiesPage kind="activities" />} />
+          <Route path="meetings" element={<ActivitiesPage kind="meetings" />} />
+          <Route path="activities/new" element={<ActivityFormPage />} />
           <Route path="activities/:id" element={<ActivityDetailPage />} />
-          <Route path="activities/:id/edit" element={<CoreOnly><ActivityFormPage /></CoreOnly>} />
+          <Route path="activities/:id/edit" element={<ActivityFormPage />} />
+          <Route path="tasks" element={<TasksPage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="feedback" element={<FeedbackPage />} />
+          <Route path="departments/:id" element={<DepartmentPage />} />
           <Route path="contributions" element={<ContributionsPage />} />
           <Route path="review" element={<CoreOnly><ReviewPage /></CoreOnly>} />
           <Route path="analytics" element={<CoreOnly><AnalyticsPage /></CoreOnly>} />
@@ -58,7 +67,7 @@ function Gate() {
 
 export function App() {
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, "") || undefined}>
+    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
       <ToastProvider>
         <AuthProvider>
           <Gate />

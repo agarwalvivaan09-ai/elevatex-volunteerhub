@@ -3,20 +3,21 @@ import { Link } from 'react-router-dom';
 import { useMe } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import * as api from '../lib/api';
-import type { Role, UserProfile } from '../lib/types';
-import { ROLE_LABEL } from '../lib/types';
+import { normRole } from '../lib/access';
+import { MAX_HODS } from '../lib/structure';
+import type { Position, UserProfile } from '../lib/types';
 import { fmtHours } from '../lib/format';
 import { Avatar, Confirm, Empty, Field, Modal, useAction } from '../components/ui';
-import { IconPlus, IconUsers } from '../components/icons';
+import { PersonCard, RoleBadge, bySeniority, displayTitle } from '../components/people';
+import { IconMail, IconPlus, IconUsers } from '../components/icons';
 
-const roleTone: Record<Role, string> = { admin: 'brown', core: 'brand', member: '' };
-export const RoleBadge = ({ role }: { role: Role }) => <span className={`badge plain ${roleTone[role]}`}>{ROLE_LABEL[role]}</span>;
+export { RoleBadge };
 
 export function MembersPage() {
-  const { isAdmin, isCore } = useMe();
-  const { users, positionById, departmentById, participations } = useData();
+  const { can } = useMe();
+  const { users, positionById, departmentById, departments, participations } = useData();
   const [q, setQ] = useState('');
-  const [role, setRole] = useState<Role | 'all'>('all');
+  const [view, setView] = useState<'directory' | 'table'>(can.isPeopleAdmin ? 'table' : 'directory');
   const [showRemoved, setShowRemoved] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<UserProfile | null>(null);
@@ -27,192 +28,181 @@ export function MembersPage() {
     return m;
   }, [participations]);
 
-  const list = users
-    .filter((u) => (showRemoved ? true : u.status === 'active'))
-    .filter((u) => role === 'all' || u.role === role)
-    .filter((u) => {
-      if (!q) return true;
-      const pos = u.positionId ? positionById.get(u.positionId)?.title ?? '' : '';
-      return `${u.name} ${u.email} ${pos}`.toLowerCase().includes(q.toLowerCase());
-    });
+  const match = (u: UserProfile) => !q || `${u.name} ${u.email} ${displayTitle(u, positionById)} ${u.departmentId ? departmentById.get(u.departmentId)?.name ?? '' : ''}`.toLowerCase().includes(q.toLowerCase());
+  const active = users.filter((u) => u.status === 'active').filter(match).sort(bySeniority);
+  const tableRows = users.filter((u) => showRemoved || u.status === 'active').filter(match).sort(bySeniority);
+
+  const leadership = active.filter((u) => ['chairman', 'vice_chairman', 'executive'].includes(normRole(u.role)));
+  const board = active.filter((u) => normRole(u.role) === 'board');
+  const heads = active.filter((u) => normRole(u.role) === 'hod');
+  const members = active.filter((u) => normRole(u.role) === 'member');
+  const card = (u: UserProfile) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} />;
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>{isCore ? 'Members' : 'Directory'}</h1>
-          <p>{users.filter((u) => u.status === 'active').length} active members of ElevateX.</p>
+          <h1>{can.isPeopleAdmin ? 'People' : 'Directory'}</h1>
+          <p>{users.filter((u) => u.status === 'active').length} active members. Email anyone directly from here.</p>
         </div>
-        {isAdmin && <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />Add member</button>}
+        <div className="page-actions">
+          {can.isPeopleAdmin && <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />Add person</button>}
+        </div>
       </div>
 
-      <div className="spread" style={{ marginBottom: 14 }}>
-        <div className="segmented" role="group" aria-label="Filter by access level">
-          {(['all', 'admin', 'core', 'member'] as const).map((r) => (
-            <button key={r} className={role === r ? 'on' : ''} onClick={() => setRole(r)}>{r === 'all' ? 'Everyone' : ROLE_LABEL[r]}</button>
-          ))}
+      <div className="spread" style={{ marginBottom: 16 }}>
+        <div className="segmented" role="group" aria-label="View">
+          <button className={view === 'directory' ? 'on' : ''} onClick={() => setView('directory')}>By role</button>
+          <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{can.isPeopleAdmin ? 'Manage' : 'List'}</button>
         </div>
         <div className="row">
-          {isAdmin && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show removed</label>}
-          <input className="input" style={{ width: 240 }} placeholder="Search name, email or position…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search members" />
+          {can.isPeopleAdmin && view === 'table' && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show removed</label>}
+          <input className="input" style={{ width: 240 }} placeholder="Search name, position, department…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search people" />
         </div>
       </div>
 
-      <section className="card">
-        {list.length === 0 ? (
-          <Empty title="No members match" icon={<IconUsers />} />
-        ) : (
+      {view === 'directory' ? (
+        <div className="stack">
+          {leadership.length > 0 && <section className="stack-sm"><div className="tier">Leadership</div><div className="people-grid">{leadership.map(card)}</div></section>}
+          {board.length > 0 && <section className="stack-sm"><div className="tier">Board of Advisors</div><div className="people-grid">{board.map(card)}</div></section>}
+          {heads.length > 0 && <section className="stack-sm"><div className="tier">Heads of Department</div><div className="people-grid">{heads.map(card)}</div></section>}
+          {departments.map((d) => {
+            const list = members.filter((u) => u.departmentId === d.id);
+            return list.length ? <section key={d.id} className="stack-sm"><div className="tier"><Link to={`/departments/${d.id}`} style={{ color: 'inherit' }}>{d.name}</Link> · {list.length}</div><div className="people-grid">{list.map(card)}</div></section> : null;
+          })}
+          {members.filter((u) => !u.departmentId || !departmentById.has(u.departmentId)).length > 0 && (
+            <section className="stack-sm"><div className="tier">Members without a department</div><div className="people-grid">{members.filter((u) => !u.departmentId || !departmentById.has(u.departmentId)).map(card)}</div></section>
+          )}
+          {active.length === 0 && <div className="card"><Empty title="No one matches" icon={<IconUsers />} /></div>}
+        </div>
+      ) : (
+        <section className="card">
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr>
-                  <th>Member</th><th>Position</th><th>Access</th>
-                  {isCore && <th className="num">Verified hours</th>}
-                  {isAdmin && <th className="num">Manage</th>}
-                </tr>
+                <tr><th>Person</th><th>Position</th><th>Department</th><th>Access</th>{can.isCore && <th className="num">Verified hours</th>}<th className="num">{can.isPeopleAdmin ? 'Manage' : ''}</th></tr>
               </thead>
               <tbody>
-                {list.map((u) => {
-                  const pos = u.positionId ? positionById.get(u.positionId) : undefined;
-                  const dept = pos?.departmentId ? departmentById.get(pos.departmentId)?.name : undefined;
+                {tableRows.map((u) => {
+                  const editable = can.isPeopleAdmin && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman');
                   return (
                     <tr key={u.id} style={u.status === 'removed' ? { opacity: 0.55 } : undefined}>
-                      <td>
-                        <div className="person">
-                          <Avatar name={u.name} size="sm" />
-                          <div>
-                            <Link to={`/members/${u.id}`}>{u.name}</Link>
-                            <div className="tiny muted">{u.email}</div>
-                          </div>
+                      <td><div className="person"><Avatar name={u.name} size="sm" /><div><Link to={`/members/${u.id}`}>{u.name}</Link><div className="tiny muted">{u.email}</div></div></div></td>
+                      <td className="small">{displayTitle(u, positionById)}</td>
+                      <td className="small">{u.departmentId ? departmentById.get(u.departmentId)?.name ?? '—' : <span className="muted">—</span>}</td>
+                      <td><RoleBadge role={u.role} />{u.status === 'removed' && <span className="badge bad" style={{ marginLeft: 6 }}>Removed</span>}</td>
+                      {can.isCore && <td className="num">{fmtHours(hoursBy.get(u.id) ?? 0)}</td>}
+                      <td className="num">
+                        <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          <a className="btn btn-sm" href={`mailto:${u.email}`} aria-label={`Email ${u.name}`}><IconMail /></a>
+                          {editable && <button className="btn btn-sm" onClick={() => setEditing(u)}>Edit</button>}
                         </div>
                       </td>
-                      <td className="small">{pos?.title ?? <span className="muted">Not assigned</span>}{dept && <div className="tiny muted">{dept}</div>}</td>
-                      <td><RoleBadge role={u.role} />{u.status === 'removed' && <span className="badge bad" style={{ marginLeft: 6 }}>Removed</span>}</td>
-                      {isCore && <td className="num">{fmtHours(hoursBy.get(u.id) ?? 0)}</td>}
-                      {isAdmin && <td className="num">{u.role !== 'admin' ? <button className="btn btn-sm" onClick={() => setEditing(u)}>Edit</button> : <span className="tiny muted">You</span>}</td>}
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      {adding && <AddMemberModal onClose={() => setAdding(false)} />}
-      {editing && <EditMemberModal u={editing} onClose={() => setEditing(null)} />}
+      {adding && <PersonModal onClose={() => setAdding(false)} />}
+      {editing && <PersonModal u={editing} onClose={() => setEditing(null)} />}
     </>
   );
 }
 
-function PositionSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const { positions, departmentById } = useData();
-  return (
-    <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">— No position —</option>
-      {positions.map((p) => (
-        <option key={p.id} value={p.id}>{p.title}{p.departmentId ? ` (${departmentById.get(p.departmentId)?.name ?? ''})` : ''}</option>
-      ))}
-    </select>
-  );
-}
-
-function AddMemberModal({ onClose }: { onClose: () => void }) {
-  const [f, setF] = useState({ name: '', email: '', role: 'member' as 'member' | 'core', positionId: 'general-member' });
-  const [done, setDone] = useState<{ email: string; inviteSent: boolean } | null>(null);
+/** Add or edit a person. The position decides their access; members also pick a department. */
+export function PersonModal({ u, onClose }: { u?: UserProfile; onClose: () => void }) {
+  const { can } = useMe();
+  const { positions, departments, users } = useData();
+  const [f, setF] = useState({
+    name: u?.name ?? '',
+    email: u?.email ?? '',
+    positionId: u?.positionId && positions.some((p) => p.id === u.positionId) ? u.positionId : 'member',
+    departmentId: u?.departmentId ?? '',
+    title: u?.title ?? '',
+    responsibilities: u?.responsibilities ?? '',
+  });
+  const [done, setDone] = useState<{ inviteSent: boolean } | null>(null);
+  const [confirm, setConfirm] = useState<'remove' | 'restore' | null>(null);
   const { busy, run } = useAction();
-  const valid = f.name.trim() && /^\S+@\S+\.\S+$/.test(f.email.trim());
+
+  const choosable = positions.filter((p) => p.role !== 'chairman' && (p.role !== 'vice_chairman' || can.isChair));
+  const pos: Position | undefined = positions.find((p) => p.id === f.positionId);
+  const role = pos?.role ?? 'member';
+  const needsDept = role === 'member';
+  const departmentId = role === 'hod' ? pos?.departmentId ?? null : needsDept ? f.departmentId || null : f.departmentId || null;
+  const hodCount = role === 'hod' && departmentId ? users.filter((x) => x.status === 'active' && x.id !== u?.id && normRole(x.role) === 'hod' && x.departmentId === departmentId).length : 0;
+  const tooManyHods = hodCount >= MAX_HODS;
+  const valid = f.name.trim() && /^\S+@\S+\.\S+$/.test(f.email.trim()) && pos && (!needsDept || f.departmentId) && !tooManyHods;
+
+  async function save() {
+    const data = { name: f.name, email: f.email, positionId: f.positionId, role, departmentId, title: f.title.trim() || null };
+    if (u) {
+      const ok = await run(() => api.updateMember(u.id, { name: f.name.trim(), positionId: f.positionId, role, departmentId, title: data.title, responsibilities: f.responsibilities.trim() || null }), 'Saved');
+      if (ok) onClose();
+    } else {
+      await run(async () => setDone(await api.addMember(data)));
+    }
+  }
 
   if (done)
     return (
-      <Modal title="Member added" onClose={onClose} footer={<button className="btn btn-primary" onClick={onClose}>Done</button>}>
-        <div className="callout">
-          <b>{f.name}</b> can now sign in.{' '}
-          {done.inviteSent
-            ? <>An email has been sent to <b>{done.email}</b> with a link to set their password. Ask them to check spam if it doesn't arrive.</>
-            : <>The invitation email could not be sent. Use “Resend invite” from their profile, or ask them to use “Forgot password” on the sign-in page.</>}
-        </div>
+      <Modal title="Person added" onClose={onClose} footer={<button className="btn btn-primary" onClick={onClose}>Done</button>}>
+        <div className="callout"><b>{f.name}</b> can now sign in as <b>{pos?.title}</b>. {done.inviteSent ? <>An email has been sent to <b>{f.email}</b> to set their password (ask them to check spam).</> : <>The invitation email could not be sent — use “Resend invite” from Edit, or ask them to use “Forgot password”.</>}</div>
       </Modal>
     );
 
   return (
-    <Modal
-      title="Add member"
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !valid}
-            onClick={() => run(async () => {
-              const r = await api.addMember({ ...f, positionId: f.positionId || null });
-              setDone({ email: f.email.trim().toLowerCase(), inviteSent: r.inviteSent });
-            })}>
-            {busy ? 'Adding…' : 'Add and send invite'}
-          </button>
-        </>
-      }
-    >
+    <Modal title={u ? `Edit ${u.name}` : 'Add a person'} onClose={onClose}
+      footer={<>
+        {u && (u.status === 'active'
+          ? <button className="btn btn-danger" style={{ marginRight: 'auto' }} onClick={() => setConfirm('remove')}>Remove access</button>
+          : <button className="btn btn-ok" style={{ marginRight: 'auto' }} onClick={() => setConfirm('restore')}>Restore access</button>)}
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy || !valid} onClick={save}>{u ? 'Save' : busy ? 'Adding…' : 'Add and send invite'}</button>
+      </>}>
       <Field label="Full name"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></Field>
-      <Field label="Email" hint="They'll get a link at this address to set their own password."><input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-      <Field label="Position"><PositionSelect value={f.positionId} onChange={(v) => setF({ ...f, positionId: v })} /></Field>
-      <Field label="Access level">
-        <select className="select" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as 'member' | 'core' })}>
-          <option value="member">Member — own dashboard, request to join, log hours</option>
-          <option value="core">Core Team — also manages activities, requests, attendance</option>
+      <Field label="Email" hint={u ? 'The sign-in email cannot be changed.' : 'They get a link at this address to set their password.'}><input className="input" type="email" value={f.email} disabled={!!u} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+      <Field label="Position" hint="The position decides what they can access.">
+        <select className="select" value={f.positionId} onChange={(e) => setF({ ...f, positionId: e.target.value })}>
+          {choosable.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
         </select>
       </Field>
-    </Modal>
-  );
-}
-
-export function EditMemberModal({ u, onClose }: { u: UserProfile; onClose: () => void }) {
-  const [f, setF] = useState({ name: u.name, positionId: u.positionId ?? '', role: u.role as 'member' | 'core', responsibilities: u.responsibilities ?? '' });
-  const [confirm, setConfirm] = useState<'remove' | 'restore' | null>(null);
-  const { busy, run } = useAction();
-
-  const save = () => run(async () => {
-    await api.updateMember(u.id, { name: f.name.trim(), positionId: f.positionId || null, role: f.role, responsibilities: f.responsibilities.trim() || null });
-    onClose();
-  }, 'Member updated');
-
-  return (
-    <Modal
-      title={`Edit ${u.name}`}
-      onClose={onClose}
-      footer={
-        <>
-          {u.status === 'active'
-            ? <button className="btn btn-danger" style={{ marginRight: 'auto' }} onClick={() => setConfirm('remove')}>Remove access</button>
-            : <button className="btn btn-ok" style={{ marginRight: 'auto' }} onClick={() => setConfirm('restore')}>Restore access</button>}
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !f.name.trim()} onClick={save}>Save</button>
-        </>
-      }
-    >
-      <Field label="Full name"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-      <Field label="Position"><PositionSelect value={f.positionId} onChange={(v) => setF({ ...f, positionId: v })} /></Field>
-      <Field label="Access level" hint="Core Team can create activities, handle requests, attendance, hours and EDPI. Only you can manage members and positions.">
-        <select className="select" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as 'member' | 'core' })}>
-          <option value="member">Member</option>
-          <option value="core">Core Team</option>
-        </select>
+      {pos && <p className="small muted" style={{ marginTop: -6 }}>{ACCESS_TEXT[role]}</p>}
+      {(needsDept || role !== 'hod') && (
+        <Field label={needsDept ? 'Department' : 'Department (optional)'}>
+          <select className="select" value={f.departmentId} onChange={(e) => setF({ ...f, departmentId: e.target.value })}>
+            <option value="">{needsDept ? 'Choose…' : 'None'}</option>
+            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </Field>
+      )}
+      {tooManyHods && <div className="callout bad">This department already has {MAX_HODS} heads. Change one of them first.</div>}
+      <Field label="Display title (optional)" hint="Shown instead of the position, e.g. “Founder, Former CEO & Chairman” or “Former Head of Drives”.">
+        <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
       </Field>
-      <Field label="Individual responsibilities (optional)" hint="Shown on their dashboard alongside their position's responsibilities.">
-        <textarea className="textarea" value={f.responsibilities} onChange={(e) => setF({ ...f, responsibilities: e.target.value })} />
-      </Field>
-      <div className="row small">
-        <span className="muted">Sign-in email: {u.email}</span>
-        <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => run(() => api.sendInvite(u.email), 'Password-setup email sent')}>Resend invite</button>
-      </div>
-      {confirm === 'remove' && (
-        <Confirm title={`Remove ${u.name}?`} danger confirmLabel="Remove access"
-          message="They will be signed out of everything and can't see any ElevateX data. Their history and verified hours are kept, and you can restore access later."
+      {u && <Field label="Individual responsibilities (optional)"><textarea className="textarea" value={f.responsibilities} onChange={(e) => setF({ ...f, responsibilities: e.target.value })} /></Field>}
+      {u && <div className="row small"><span className="muted">Sign-in email: {u.email}</span><button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => run(() => api.sendInvite(u.email), 'Password-setup email sent')}>Resend invite</button></div>}
+      {u && confirm === 'remove' && (
+        <Confirm title={`Remove ${u.name}?`} danger confirmLabel="Remove access" message="They lose access to everything immediately. Their history and verified hours are kept and you can restore them later."
           onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'removed' }), 'Access removed')) onClose(); }} />
       )}
-      {confirm === 'restore' && (
-        <Confirm title={`Restore ${u.name}?`} confirmLabel="Restore access" message="They will be able to sign in again with the same account."
+      {u && confirm === 'restore' && (
+        <Confirm title={`Restore ${u.name}?`} confirmLabel="Restore" message="They can sign in again with the same account."
           onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'active' }), 'Access restored')) onClose(); }} />
       )}
     </Modal>
   );
 }
+
+const ACCESS_TEXT: Record<string, string> = {
+  chairman: 'Full access, including adding and removing people.',
+  vice_chairman: 'Full access, including adding and removing people and assigning positions.',
+  executive: 'Overall access to every department: drives, fundraisers, all meetings, tasks for anyone. Cannot add or remove people.',
+  board: 'Full view; can add drives, fundraisers and tasks for anyone, and call board meetings.',
+  hod: 'Runs their own department: department meetings and tasks for their members only. Approves drive proposals.',
+  member: 'Own dashboard, volunteering, proposing drives, tasks from their head.',
+};

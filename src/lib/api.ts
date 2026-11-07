@@ -3,25 +3,30 @@
  * (firestore.rules) validate each of these on the server.
  */
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
   where,
   writeBatch,
-  addDoc,
   type DocumentData,
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth, createAuthAccount, db } from './firebase';
-import type { Activity, Department, EdpiRecord, Participation, Position, Role, UserProfile } from './types';
+import type { Activity, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
+import { TYPE_LABEL } from './types';
 import { computeEdpi, EDPI_SETTINGS } from './edpi';
+import { DEPARTMENTS, LEGACY_DEPARTMENTS, LEGACY_POSITIONS, POSITIONS } from './structure';
+import { isCoreRole } from './access';
+import { fmtDateTime } from './format';
 
 /** Recursively turn Firestore Timestamps into JS Dates. */
 export function fromFirestore<T>(id: string, data: DocumentData): T {
@@ -40,57 +45,98 @@ const uid = () => {
   return u.uid;
 };
 
-// ---------------------------------------------------------------- setup
+// ---------------------------------------------------------------- notifications
+export interface NotifyInput { title: string; body?: string; link?: string; kind: string }
+
+/** In-app notifications, fanned out in batches. The sender is never notified of their own action. */
+export async function notify(uids: Iterable<string>, n: NotifyInput) {
+  const me = auth.currentUser?.uid;
+  const targets = [...new Set(uids)].filter((u) => u && u !== me);
+  for (let i = 0; i < targets.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const t of targets.slice(i, i + 400)) {
+      batch.set(doc(collection(db, 'notifications')), {
+        uid: t,
+        title: n.title.slice(0, 200),
+        body: n.body?.slice(0, 500) ?? null,
+        link: n.link ?? null,
+        kind: n.kind,
+        read: false,
+        createdBy: me,
+        createdAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+}
+/** Notifications are best-effort: a failure never blocks the main action. */
+const notifySafe = (uids: Iterable<string>, n: NotifyInput) => notify(uids, n).catch((e) => console.warn('notify failed', e));
+
+export const markRead = (id: string) => updateDoc(doc(db, 'notifications', id), { read: true, readAt: serverTimestamp() });
+export async function markAllRead(ids: string[]) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const b = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => b.update(doc(db, 'notifications', id), { read: true, readAt: serverTimestamp() }));
+    await b.commit();
+  }
+}
+export async function clearNotifications(ids: string[]) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const b = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => b.delete(doc(db, 'notifications', id)));
+    await b.commit();
+  }
+}
+
+const activeIds = (users: UserProfile[]) => users.filter((u) => u.status === 'active').map((u) => u.id);
+const coreIds = (users: UserProfile[]) => users.filter((u) => u.status === 'active' && isCoreRole(u.role)).map((u) => u.id);
+
+// ---------------------------------------------------------------- setup & migration
 export async function adminExists(): Promise<boolean> {
   return (await getDoc(doc(db, 'meta', 'bootstrap'))).exists();
 }
 
-export async function bootstrapAdmin(name: string) {
+async function writeStructure() {
+  const batch = writeBatch(db);
+  DEPARTMENTS.forEach(({ id, ...d }) => batch.set(doc(db, 'departments', id), d));
+  POSITIONS.forEach(({ id, ...p }) => batch.set(doc(db, 'positions', id), { ...p, description: p.description ?? '' }));
+  LEGACY_DEPARTMENTS.forEach((id) => batch.delete(doc(db, 'departments', id)));
+  LEGACY_POSITIONS.forEach((id) => batch.delete(doc(db, 'positions', id)));
+  await batch.commit();
+}
+
+export async function bootstrapChairman(name: string) {
   const u = auth.currentUser!;
   const batch = writeBatch(db);
   batch.set(doc(db, 'users', u.uid), {
     name: name.trim(),
     email: (u.email ?? '').toLowerCase(),
-    role: 'admin',
+    role: 'chairman',
     status: 'active',
-    positionId: null,
+    positionId: 'chairman',
+    departmentId: null,
+    title: null,
     bio: null,
     responsibilities: null,
     joinedAt: serverTimestamp(),
   });
   batch.set(doc(db, 'meta', 'bootstrap'), { adminUid: u.uid, at: serverTimestamp() });
   await batch.commit();
-  await seedDefaultStructure(u.uid);
+  await writeStructure();
 }
 
-/** Starter departments and positions so the organisation page isn't empty. Admin can edit everything. */
-async function seedDefaultStructure(adminUid: string) {
-  const batch = writeBatch(db);
-  const depts: [string, string, string][] = [
-    ['leadership', 'Leadership', 'Overall direction of ElevateX.'],
-    ['finance', 'Finance', 'Budgets, fundraising accounts and drive spending.'],
-    ['operations', 'Operations', 'Logistics, venues, volunteers on the ground.'],
-    ['projects', 'Projects', 'Planning and running drives and campaigns.'],
-    ['outreach', 'Outreach & Media', 'Partnerships, social media and communications.'],
-  ];
-  depts.forEach(([id, name, description], i) => batch.set(doc(db, 'departments', id), { name, description, order: i }));
-  const positions: [string, string, string | null, string[]][] = [
-    ['president', 'President / CEO', 'leadership', ['Sets direction and priorities', 'Represents ElevateX externally', 'Signs off major decisions']],
-    ['head-finance', 'Head of Finance', 'finance', ['Owns drive budgets', 'Approves spending', 'Keeps receipts and accounts']],
-    ['head-operations', 'Head of Operations', 'operations', ['Runs logistics on drive days', 'Coordinates volunteers', 'Venue and supplies']],
-    ['project-head', 'Project Head', 'projects', ['Plans a drive end-to-end', 'Fills and locks the EDPI plan', 'Leads the debrief']],
-    ['head-outreach', 'Head of Outreach', 'outreach', ['Partner organisations', 'Social media', 'Announcements']],
-    ['general-member', 'General Member', null, ['Take part in drives and events', 'Log hours honestly', 'Help where needed']],
-  ];
-  positions.forEach(([id, title, departmentId, responsibilities], i) =>
-    batch.set(doc(db, 'positions', id), { title, departmentId, responsibilities, description: '', order: i }),
-  );
-  batch.update(doc(db, 'users', adminUid), { positionId: 'president' });
-  await batch.commit();
+/** v1 → v2: the original Admin becomes Chairman and the ElevateX structure is installed. */
+export async function migrateToV2(me: UserProfile) {
+  if (me.role === 'admin') {
+    await updateDoc(doc(db, 'users', me.id), { role: 'chairman', positionId: 'chairman', departmentId: null, updatedAt: serverTimestamp() });
+  }
+  await writeStructure();
 }
 
 // ---------------------------------------------------------------- members
-export async function addMember(input: { name: string; email: string; role: Exclude<Role, 'admin'>; positionId: string | null }) {
+export interface MemberInput { name: string; email: string; positionId: string; role: Role; departmentId: string | null; title: string | null }
+
+export async function addMember(input: MemberInput) {
   const email = input.email.trim().toLowerCase();
   let newUid: string;
   try {
@@ -98,7 +144,7 @@ export async function addMember(input: { name: string; email: string; role: Excl
   } catch (e: unknown) {
     const code = (e as { code?: string }).code;
     if (code === 'auth/email-already-in-use')
-      throw new Error('This email already has an account. If they were removed, find them in the Members list and reactivate them.');
+      throw new Error('This email already has an account. If they were removed, find them in the Members list and restore them.');
     if (code === 'auth/invalid-email') throw new Error('That email address is not valid.');
     throw e;
   }
@@ -108,6 +154,8 @@ export async function addMember(input: { name: string; email: string; role: Excl
     role: input.role,
     status: 'active',
     positionId: input.positionId,
+    departmentId: input.departmentId,
+    title: input.title?.trim() || null,
     bio: null,
     responsibilities: null,
     joinedAt: serverTimestamp(),
@@ -122,11 +170,9 @@ export async function addMember(input: { name: string; email: string; role: Excl
   return { uid: newUid, inviteSent };
 }
 
-export async function sendInvite(email: string) {
-  await sendPasswordResetEmail(auth, email);
-}
+export const sendInvite = (email: string) => sendPasswordResetEmail(auth, email);
 
-export async function updateMember(memberUid: string, patch: Partial<Pick<UserProfile, 'role' | 'positionId' | 'status' | 'responsibilities' | 'name'>>) {
+export async function updateMember(memberUid: string, patch: Partial<Pick<UserProfile, 'role' | 'positionId' | 'departmentId' | 'title' | 'status' | 'responsibilities' | 'name'>>) {
   await updateDoc(doc(db, 'users', memberUid), { ...patch, updatedAt: serverTimestamp() });
 }
 
@@ -159,9 +205,20 @@ export async function savePosition(p: Omit<Position, 'id'> & { id?: string }) {
 export const deletePosition = (id: string) => deleteDoc(doc(db, 'positions', id));
 
 // ---------------------------------------------------------------- activities
-export type ActivityInput = Omit<Activity, 'id' | 'createdBy' | 'createdAt'>;
+export type ActivityInput = Omit<Activity, 'id' | 'createdBy' | 'createdAt' | 'reviewedBy' | 'reviewNote'>;
 
-export async function saveActivity(input: ActivityInput, id?: string): Promise<string> {
+function activityAnnouncement(a: { type: Activity['type']; title: string; startAt: Date; venue: string; mode: Activity['mode'] }) {
+  const where = a.mode === 'online' ? 'Online' : a.venue;
+  return { title: `New ${TYPE_LABEL[a.type].toLowerCase()}: ${a.title}`, body: `${fmtDateTime(a.startAt)}${where ? ` · ${where}` : ''}` };
+}
+
+/**
+ * Creates or updates an activity, then notifies the right people:
+ *  - a published drive / fundraiser / event → everyone
+ *  - a proposed drive → the core team, for approval
+ *  - a meeting → its invitees
+ */
+export async function saveActivity(input: ActivityInput, ctx: { users: UserProfile[]; invitees?: string[] }, id?: string): Promise<string> {
   const data = {
     ...input,
     startAt: Timestamp.fromDate(input.startAt),
@@ -172,25 +229,54 @@ export async function saveActivity(input: ActivityInput, id?: string): Promise<s
     await updateDoc(doc(db, 'activities', id), data);
     return id;
   }
-  const ref = await addDoc(collection(db, 'activities'), { ...data, createdBy: uid(), createdAt: serverTimestamp() });
+  const ref = await addDoc(collection(db, 'activities'), { ...data, createdBy: uid(), createdAt: serverTimestamp(), reviewedBy: null, reviewNote: null });
+  const link = `/activities/${ref.id}`;
+  if (input.status === 'proposed') {
+    await notifySafe(coreIds(ctx.users), { kind: 'proposal', title: `Drive proposal needs approval: ${input.title}`, body: `Proposed for ${fmtDateTime(input.startAt)}`, link });
+  } else if (input.type === 'meeting') {
+    await notifySafe(ctx.invitees ?? [], { kind: 'meeting', ...activityAnnouncement(input), title: `Meeting: ${input.title}`, link });
+  } else {
+    await notifySafe(activeIds(ctx.users), { kind: input.type, ...activityAnnouncement(input), link });
+  }
   return ref.id;
+}
+
+export async function reviewProposal(a: Activity, decision: 'upcoming' | 'declined', note: string, users: UserProfile[]) {
+  // Atomic: if two core members click at the same moment, only one decision (and one set of notifications) wins.
+  const ref = doc(db, 'activities', a.id);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.data()?.status !== 'proposed') throw new Error('Someone on the core team has already reviewed this proposal.');
+    tx.update(ref, { status: decision, reviewedBy: uid(), reviewNote: note.trim() || null, reviewedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  });
+  const link = `/activities/${a.id}`;
+  if (decision === 'upcoming') {
+    await notifySafe([a.createdBy], { kind: 'proposal', title: `Your drive was approved: ${a.title}`, body: note || 'It is now live and members can volunteer.', link });
+    await notifySafe(activeIds(users).filter((x) => x !== a.createdBy), { kind: 'drive', ...activityAnnouncement(a), link });
+  } else {
+    await notifySafe([a.createdBy], { kind: 'proposal', title: `Your drive proposal was declined: ${a.title}`, body: note || undefined, link });
+  }
 }
 
 export async function setActivityStatus(id: string, status: Activity['status']) {
   await updateDoc(doc(db, 'activities', id), { status, updatedAt: serverTimestamp() });
 }
 
-/** Admin only: deletes the activity together with its participation records and EDPI record. */
+/** Deletes the activity together with its volunteer records and EDPI record. */
 export async function deleteActivity(id: string) {
-  const parts = await getDocs(query(collection(db, 'participations'), where('activityId', '==', id)));
   const batch = writeBatch(db);
-  parts.forEach((p) => batch.delete(p.ref));
-  batch.delete(doc(db, 'edpi', id));
+  try {
+    const parts = await getDocs(query(collection(db, 'participations'), where('activityId', '==', id)));
+    parts.forEach((p) => batch.delete(p.ref));
+  } catch {
+    /* proposals have no volunteers, and their creator may not be able to list them */
+  }
   batch.delete(doc(db, 'activities', id));
   await batch.commit();
+  await deleteDoc(doc(db, 'edpi', id)).catch(() => {});
 }
 
-// ---------------------------------------------------------------- participation
+// ---------------------------------------------------------------- volunteering
 const pid = (activityId: string, memberUid: string) => `${activityId}_${memberUid}`;
 
 const blankParticipation = {
@@ -205,13 +291,13 @@ const blankParticipation = {
   verifiedAt: null,
 };
 
-export async function requestToJoin(activityId: string, note: string) {
+export async function volunteer(a: Activity, note: string) {
   const me = uid();
-  await setDoc(doc(db, 'participations', pid(activityId, me)), {
-    activityId,
+  await setDoc(doc(db, 'participations', pid(a.id, me)), {
+    activityId: a.id,
     uid: me,
-    status: 'requested',
-    source: 'request',
+    status: 'approved',
+    source: 'volunteer',
     note: note.trim() || null,
     assignment: null,
     reviewNote: null,
@@ -221,27 +307,15 @@ export async function requestToJoin(activityId: string, note: string) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  const organiser = a.leadUid ?? a.createdBy;
+  await notifySafe([organiser], { kind: 'volunteer', title: `New volunteer for ${a.title}`, body: auth.currentUser?.email ?? undefined, link: `/activities/${a.id}` });
 }
 
-export const withdrawRequest = (p: Participation) => deleteDoc(doc(db, 'participations', p.id));
+export const withdraw = (p: Participation) => deleteDoc(doc(db, 'participations', p.id));
 
-export async function reviewRequest(p: Participation, status: 'approved' | 'deferred' | 'rejected', reviewNote: string, assignment?: string) {
-  const patch: DocumentData = {
-    status,
-    reviewNote: reviewNote.trim() || null,
-    reviewedBy: uid(),
-    reviewedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-  if (assignment !== undefined) patch.assignment = assignment.trim() || null;
-  // A participation that is no longer approved cannot keep attendance/hours/credits.
-  if (status !== 'approved') Object.assign(patch, blankParticipation);
-  await updateDoc(doc(db, 'participations', p.id), patch);
-}
-
-export async function assignMember(activityId: string, memberUid: string, assignment: string) {
-  await setDoc(doc(db, 'participations', pid(activityId, memberUid)), {
-    activityId,
+export async function addVolunteer(a: Activity, memberUid: string, assignment: string) {
+  await setDoc(doc(db, 'participations', pid(a.id, memberUid)), {
+    activityId: a.id,
     uid: memberUid,
     status: 'approved',
     source: 'assigned',
@@ -254,16 +328,25 @@ export async function assignMember(activityId: string, memberUid: string, assign
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  await notifySafe([memberUid], { kind: 'volunteer', title: `You've been added to ${a.title}`, body: assignment ? `Your role: ${assignment}` : fmtDateTime(a.startAt), link: `/activities/${a.id}` });
 }
 
 export async function setAssignment(p: Participation, assignment: string) {
   await updateDoc(doc(db, 'participations', p.id), { assignment: assignment.trim() || null, updatedAt: serverTimestamp() });
 }
 
+export async function removeVolunteer(p: Participation, a: Activity, reason: string) {
+  await updateDoc(doc(db, 'participations', p.id), { status: 'rejected', reviewNote: reason.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp(), ...blankParticipation, updatedAt: serverTimestamp() });
+  await notifySafe([p.uid], { kind: 'volunteer', title: `You were removed from ${a.title}`, body: reason || undefined, link: `/activities/${a.id}` });
+}
+
+export async function restoreVolunteer(p: Participation) {
+  await updateDoc(doc(db, 'participations', p.id), { status: 'approved', reviewNote: null, updatedAt: serverTimestamp() });
+}
+
 export async function markAttendance(p: Participation, attendance: 'present' | 'absent' | null) {
   const patch: DocumentData = { attendance, attendanceBy: uid(), attendanceAt: serverTimestamp(), updatedAt: serverTimestamp() };
   if (attendance !== 'present') {
-    // Hours and credits only exist for verified attendance.
     Object.assign(patch, { hoursStatus: p.hoursStatus === 'none' ? 'none' : 'rejected', verifiedHours: null, credits: 0, verifiedBy: null, verifiedAt: null });
   }
   await updateDoc(doc(db, 'participations', p.id), patch);
@@ -300,6 +383,70 @@ export async function rejectHours(p: Participation) {
     verifiedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+// ---------------------------------------------------------------- tasks
+export async function createTask(t: { title: string; description: string; assigneeUid: string; departmentId: string | null; dueAt: Date | null }) {
+  await addDoc(collection(db, 'tasks'), {
+    title: t.title.trim(),
+    description: t.description.trim() || null,
+    assigneeUid: t.assigneeUid,
+    departmentId: t.departmentId,
+    dueAt: t.dueAt ? Timestamp.fromDate(t.dueAt) : null,
+    status: 'todo',
+    progressNote: null,
+    createdBy: uid(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    completedAt: null,
+  });
+  await notifySafe([t.assigneeUid], { kind: 'task', title: `New task: ${t.title.trim()}`, body: t.dueAt ? `Due ${fmtDateTime(t.dueAt)}` : undefined, link: '/tasks' });
+}
+
+export async function updateTaskProgress(t: Task, status: TaskStatus, progressNote: string) {
+  await updateDoc(doc(db, 'tasks', t.id), {
+    status,
+    progressNote: progressNote.trim() || null,
+    updatedAt: serverTimestamp(),
+    completedAt: status === 'done' ? serverTimestamp() : null,
+  });
+  if (status === 'done' && t.status !== 'done') await notifySafe([t.createdBy], { kind: 'task', title: `Task completed: ${t.title}`, body: progressNote || undefined, link: '/tasks' });
+}
+
+export async function editTask(t: Task, patch: { title: string; description: string; dueAt: Date | null; assigneeUid: string; departmentId: string | null }) {
+  await updateDoc(doc(db, 'tasks', t.id), {
+    title: patch.title.trim(),
+    description: patch.description.trim() || null,
+    dueAt: patch.dueAt ? Timestamp.fromDate(patch.dueAt) : null,
+    assigneeUid: patch.assigneeUid,
+    departmentId: patch.departmentId,
+    updatedAt: serverTimestamp(),
+  });
+  if (patch.assigneeUid !== t.assigneeUid) await notifySafe([patch.assigneeUid], { kind: 'task', title: `New task: ${patch.title}`, link: '/tasks' });
+}
+
+export const deleteTask = (t: Task) => deleteDoc(doc(db, 'tasks', t.id));
+
+// ---------------------------------------------------------------- HR feedback
+export async function submitFeedback(f: { rating: number; category: string; message: string }, hrUids: string[]) {
+  await addDoc(collection(db, 'feedback'), {
+    authorUid: uid(),
+    rating: f.rating,
+    category: f.category,
+    message: f.message.trim(),
+    status: 'new',
+    hrNote: null,
+    createdAt: serverTimestamp(),
+  });
+  await notifySafe(hrUids, { kind: 'feedback', title: 'New member feedback received', body: `${f.category} · ${f.rating}/5`, link: '/feedback' });
+}
+
+export async function reviewFeedback(f: Feedback, hrNote: string) {
+  await updateDoc(doc(db, 'feedback', f.id), { status: 'reviewed', hrNote: hrNote.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp() });
+}
+
+export async function requestFeedback(users: UserProfile[], message: string) {
+  await notify(activeIds(users), { kind: 'feedback', title: 'HR would like your feedback', body: message || 'Tell us how your experience at ElevateX is going.', link: '/feedback' });
 }
 
 // ---------------------------------------------------------------- EDPI

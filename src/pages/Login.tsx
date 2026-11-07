@@ -86,8 +86,8 @@ export function LoginPage() {
             Continue with Google
           </button>
           <p className="muted small">
-            Accounts are created by the ElevateX Admin. New members get an email with a link to set their password.
-            Google sign-in works if your Google account uses the same email the Admin registered.
+            Accounts are created by the Chairman or Vice Chairman. New members get an email with a link to set their password.
+            Google sign-in works if your Gmail address is the one you were registered with.
           </p>
         </form>
       </main>

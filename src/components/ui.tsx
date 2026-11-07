@@ -170,6 +170,8 @@ export function TypeBadge({ type }: { type: Activity['type'] }) {
 }
 
 export function ActivityStatusBadge({ a }: { a: Activity }) {
+  if (a.status === 'proposed') return <span className="badge warn">Awaiting approval</span>;
+  if (a.status === 'declined') return <span className="badge bad">Not approved</span>;
   if (a.status === 'completed') return <span className="badge ok">Completed</span>;
   if (a.status === 'cancelled') return <span className="badge bad">Cancelled</span>;
   return <span className="badge info">Upcoming</span>;

@@ -8,40 +8,40 @@ Built with React + TypeScript (Vite), Firebase Authentication and Cloud Firestor
 
 ---
 
-## What each role can do
+## Who can do what
 
-| | Member | Core Team | Admin |
-|---|:-:|:-:|:-:|
-| Own dashboard, position, hours, history | ✓ | ✓ | ✓ |
-| View activities and request to join | ✓ | ✓ | ✓ |
-| Log own hours (after being marked present) | ✓ | ✓ | ✓ |
-| Edit own name, bio, phone, emergency contact | ✓ | ✓ | ✓ |
-| Create and edit drives, events, fundraisers, meetings | | ✓ | ✓ |
-| Approve, defer or decline requests and assign members | | ✓ | ✓ |
-| Record attendance and verify hours and credits | | ✓ | ✓ |
-| Fill, lock and score a drive's EDPI plan | | ✓ | ✓ |
-| See member contact details, all records and analytics | | ✓ | ✓ |
-| Delete activities | | | ✓ |
-| Add, remove and restore members | | | ✓ |
-| Change positions and access levels (Member ↔ Core) | | | ✓ |
-| Create and edit departments and positions | | | ✓ |
+Access comes from a person's **position**. The Chairman and Vice Chairman assign positions under **People**.
 
-The permissions live in [`firestore.rules`](firestore.rules) on Google's servers, not only in the interface. A member can't approve their own request, give themselves credits or change their role, even with technical tricks. The rules are covered by automated tests in `tests/rules.test.ts`.
+| | Member | Head of Dept | Board of Advisors | CEO / COO | Chairman / Vice Chairman |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Own dashboard, tasks, hours, history | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Volunteer with one click | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Propose a drive (needs core-team approval) | ✓ | ✓ | — | — | — |
+| Publish drives directly | | Drive Execution head | ✓ | ✓ | ✓ |
+| Approve or decline drive proposals | | ✓ | ✓ | ✓ | ✓ |
+| Create fundraisers and events | | ✓ | ✓ | ✓ | ✓ |
+| Department or volunteer meetings | | own department | ✓ | ✓ | ✓ |
+| Board meetings | | | ✓ | ✓ | ✓ |
+| All-member, core team and HOD meetings | | | | ✓ | ✓ |
+| Assign tasks | | own department only | anyone | anyone | anyone |
+| Read member feedback | HR dept only | HR head only | ✓ | ✓ | ✓ |
+| Analytics and approvals | | ✓ | ✓ | ✓ | ✓ |
+| Add or remove people, assign positions and heads | | | | | ✓ |
 
-Some rules are fixed and can't be bypassed:
-- **Hours and credits count only after attendance is verified.** A member can log hours only once they are marked *present*. Only Core or Admin can verify them, and only for present members.
-- **The admin account can't be demoted or removed from the app**, and nobody can be made Admin from the app.
-- **A locked EDPI plan can never be changed or unlocked.** A plan can only be created before the drive starts. Results can only be entered against a locked plan.
-- **Removed members lose access to everything immediately.** Their history is kept.
+The organiser of an activity manages its volunteer list, attendance and hours. The organiser can be any member whose drive was approved. Heads of Department can manage every activity in their own department. Nobody can verify their own hours, except Leadership.
 
-## How an activity works
+The **core team** is the Heads of Department, the Board of Advisors, the CEO, the COO, the Chairman and the Vice Chairman.
 
-1. **Core** creates the activity: description, date, venue, instructions, requirements, links, number of spots, lead and credits.
-2. **Members** press *Request to participate*, with an optional message.
-3. **Core** approves (with an optional role, for example "Registration desk"), defers or declines. They can also assign a member directly. Members see their status update straight away.
-4. **On the day**, Core marks each person *present* or *absent* in **Attendance & hours**.
-5. Present members **log their hours**, or Core types the hours in. Core presses **Verify**, and the hours and credits are added to the member's total.
-6. For **drives and fundraisers**, the **EDPI score** tab follows the five steps in the EDPI guide: Plan → Lock (before the drive) → Record → Enter results → Score. Volunteer hours (`HoursEach`) are taken from the verified records. People who aren't on the Hub can be added from the sign-in sheet. The score, the three pillar scores, the data-rule flags and the debrief question all come from the official EDPI document.
+Rules that always apply:
+- **Hours and credits count only after attendance is verified.**
+- **Every activity needs a location.** In person means a venue plus a Google Maps link. Online means a meeting link. Members join online meetings straight from the Hub.
+- **Notifications.** Everyone is notified about a new drive or fundraiser. Proposals go to the core team. Meeting invites go only to the people invited.
+- **EDPI.** After a drive is completed, the volunteers who attended can enter its EDPI results. The plan is locked before the drive starts and can never be changed.
+- **Protected roles.** Nobody can be made Chairman from the app, and the Chairman can never be removed. Only the Chairman can appoint a Vice Chairman. Each department has at most 2 heads.
+
+These permissions are enforced in [`firestore.rules`](firestore.rules) and covered by `tests/rules.test.ts`.
+
+**Departments:** Finance (CFO), Marketing (CMO), HR, Project Operations and Drive Execution.
 
 ---
 
@@ -71,14 +71,14 @@ The site is then live at `https://<your-project-id>.web.app`. To use your own ad
 
 > Always deploy `firestore.rules`. Without it, the database is either locked or open to everyone.
 
-### 4. Become the Admin
-Straight after deploying, open the site and **sign in with Google**, using the account that should own ElevateX Hub. You can also create an email/password user in **Authentication → Users → Add user**. You'll see **Set up ElevateX Hub**. Enter your name and you become the Admin.
+### 4. Become the Chairman
+Straight after deploying, open the site and **sign in with Google**, using the account that should own ElevateX Hub. You can also create an email/password user in **Authentication → Users → Add user**. You'll see **Set up ElevateX Hub**. Enter your name and you become the **Chairman**.
 This works **only once**. After that, the setup screen never appears again.
 
-The setup also creates starter departments (Leadership, Finance, Operations, Projects, Outreach & Media) and positions (President / CEO, Head of Finance, Head of Operations, Project Head, Head of Outreach, General Member). You can rename or delete all of them under **Structure & positions**.
+The setup also creates the five departments and every position: Chairman, Vice Chairman, CEO, COO, Board of Advisors, CFO, CMO, Head of HR, Head of Project Operations, Head of Drive Execution and Member. If you are upgrading an older install, the original Admin account becomes Chairman automatically the first time it signs in.
 
 ### 5. Add your members
-Go to **Members → Add member**, then enter their name, email, position and access level. Firebase emails them a link to set their own password. If the email doesn't arrive, ask them to check spam, or use **Resend invite**.
+Go to **People → Add person**, then enter their name, email, position and department. Firebase emails them a link to set their own password. If the email doesn't arrive, ask them to check spam, or use **Resend invite**.
 You can change the wording of that email in **Authentication → Templates → Password reset**. A good subject is "Set your ElevateX Hub password".
 
 ---
@@ -90,7 +90,7 @@ npm run emulators                         # terminal 1
 npm run seed                              # terminal 2 — creates demo accounts and activities
 VITE_USE_EMULATORS=true npm run dev       # terminal 2
 ```
-Sign in as `admin@elevatex.test`, `core@elevatex.test` or `member@elevatex.test`. The password for all of them is `elevatex123`.
+Sign in as `chairman@elevatex.test`, `ceo@elevatex.test`, `board@elevatex.test`, `cmo@elevatex.test`, `hr@elevatex.test`, `drives@elevatex.test` or `member@elevatex.test`. The password for all of them is `elevatex123`.
 
 ## Tests
 ```bash
@@ -116,12 +116,15 @@ tests/                     EDPI and security-rule tests
 | Collection | What's in it | Who can read |
 |---|---|---|
 | `users/{uid}` | name, email, role, status, positionId, bio | all active members |
-| `users/{uid}/private/contact` | phone, emergency contact | the member themselves and Core/Admin |
+| `users/{uid}/private/contact` | phone, emergency contact | the member themselves, the organiser and the core team |
 | `departments`, `positions` | organisation structure | all active members |
 | `activities` | drives, fundraisers, events, meetings | all active members |
-| `participations/{activityId_uid}` | request, assignment, attendance, hours, credits | the member themselves and Core/Admin |
-| `edpi/{activityId}` | locked plan, results, score, flags | Core/Admin |
-| `meta/bootstrap` | records that the Admin was set up | signed-in users |
+| `participations/{activityId_uid}` | request, assignment, attendance, hours, credits | the member themselves, the organiser and the core team |
+| `edpi/{activityId}` | locked plan, results, score, flags | core team, organiser, volunteers who attended |
+| `tasks` | task, assignee, due date, status | assignee, assigner, that department's head, leadership |
+| `notifications` | in-app notifications | the recipient only |
+| `feedback` | member feedback to HR | the author, the HR department, leadership |
+| `meta/bootstrap` | records that the Chairman was set up | signed-in users |
 
 ### Extending it later
 - New page: add a file in `src/pages/`, a `<Route>` in `src/App.tsx` and a link in `src/components/Layout.tsx`.
@@ -130,8 +133,9 @@ tests/                     EDPI and security-rule tests
 
 ### Notes
 - **Deleting a sign-in account completely.** *Remove access* blocks the person immediately. To also delete their login, go to Firebase console → Authentication → Users.
-- **A second Admin** can only be made by editing their `role` to `admin` in the Firebase console (Firestore → `users`). This keeps admin access safe from mistakes in the app.
-- **Google sign-in** works for Gmail addresses the Admin registered. For other email providers, members should use email + password.
+- **Notifications are in-app.** They show on the bell and the Notifications page. Email or phone push notifications would need Firebase Cloud Functions (the paid Blaze plan).
+- **Meeting visibility.** Meetings are hidden in the app from people who aren't invited. The meeting records themselves can be read by any signed-in member, so don't put anything confidential in a meeting description.
+- **Google sign-in** works for Gmail addresses that were registered. For other email providers, members should use email + password.
 
 ---
 

@@ -2,27 +2,23 @@ import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMe } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
+import { canSeeActivity } from '../lib/access';
 import type { ActivityType } from '../lib/types';
+import { AUDIENCE_LABEL } from '../lib/types';
 import { ActivityCard } from '../components/activity';
 import { Empty } from '../components/ui';
-import { IconCalendar, IconPlus } from '../components/icons';
+import { IconCalendar, IconPlus, IconVideo } from '../components/icons';
 
-const TYPES: { key: ActivityType | 'all'; label: string }[] = [
-  { key: 'all', label: 'All types' },
-  { key: 'drive', label: 'Drives' },
-  { key: 'fundraiser', label: 'Fundraisers' },
-  { key: 'event', label: 'Events' },
-  { key: 'meeting', label: 'Meetings' },
-];
-type When = 'upcoming' | 'completed' | 'cancelled';
+type When = 'upcoming' | 'completed' | 'cancelled' | 'proposals';
 
-export function ActivitiesPage() {
-  const { profile, isCore } = useMe();
-  const { activities, participations } = useData();
+export function ActivitiesPage({ kind }: { kind: 'activities' | 'meetings' }) {
+  const { profile, can } = useMe();
+  const { activities, participations, departmentById } = useData();
   const [params, setParams] = useSearchParams();
   const when = (params.get('when') as When) || 'upcoming';
   const type = (params.get('type') as ActivityType | 'all') || 'all';
   const [q, setQ] = useState('');
+  const isMeetings = kind === 'meetings';
 
   const set = (k: string, v: string) => {
     const next = new URLSearchParams(params);
@@ -31,49 +27,65 @@ export function ActivitiesPage() {
   };
 
   const mine = useMemo(() => new Map(participations.filter((p) => p.uid === profile.id).map((p) => [p.activityId, p])), [participations, profile.id]);
+  const volunteering = useMemo(() => new Set([...mine.values()].filter((p) => p.status === 'approved').map((p) => p.activityId)), [mine]);
   const counts = useMemo(() => {
     const c = new Map<string, number>();
     for (const p of participations) if (p.status === 'approved') c.set(p.activityId, (c.get(p.activityId) ?? 0) + 1);
     return c;
   }, [participations]);
 
-  const list = activities
-    .filter((a) => a.status === when)
-    .filter((a) => type === 'all' || a.type === type)
+  const visible = activities
+    .filter((a) => (isMeetings ? a.type === 'meeting' : a.type !== 'meeting'))
+    .filter((a) => canSeeActivity(a, profile, volunteering));
+  const inTab = (w: When) => visible.filter((a) => (w === 'proposals' ? a.status === 'proposed' || a.status === 'declined' : a.status === w));
+  const list = inTab(when)
+    .filter((a) => isMeetings || type === 'all' || a.type === type)
     .filter((a) => !q || `${a.title} ${a.venue} ${a.description}`.toLowerCase().includes(q.toLowerCase()));
-  if (when !== 'upcoming') list.reverse();
+  if (when !== 'upcoming' && when !== 'proposals') list.reverse();
 
-  const countFor = (w: When) => activities.filter((a) => a.status === w && (type === 'all' || a.type === type)).length;
+  const tabs: When[] = ['upcoming', 'completed', 'cancelled', ...(!isMeetings && inTab('proposals').length ? (['proposals'] as When[]) : [])];
+  const tabLabel: Record<When, string> = { upcoming: 'Upcoming', completed: 'Completed', cancelled: 'Cancelled', proposals: 'Proposals' };
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>Activities</h1>
-          <p>Drives, fundraisers, organisational events and meetings.</p>
+          <h1>{isMeetings ? 'Meetings' : 'Drives, fundraisers & events'}</h1>
+          <p>{isMeetings ? 'Meetings you are invited to. Join online meetings straight from here.' : 'Volunteer with one click. Anyone can propose a drive.'}</p>
         </div>
-        {isCore && <Link to="/activities/new" className="btn btn-primary"><IconPlus />New activity</Link>}
+        <div className="page-actions">
+          {isMeetings ? (
+            can.canCreateMeeting && <Link to="/activities/new?type=meeting" className="btn btn-primary"><IconVideo />Schedule meeting</Link>
+          ) : (
+            <>
+              {can.canCreateFundraiser && <Link to="/activities/new?type=fundraiser" className="btn">New fundraiser</Link>}
+              <Link to="/activities/new?type=drive" className="btn btn-primary"><IconPlus />{can.canCreateDriveDirectly ? 'New drive' : 'Propose a drive'}</Link>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="tabs" role="tablist">
-        {(['upcoming', 'completed', 'cancelled'] as When[]).map((w) => (
+        {tabs.map((w) => (
           <button key={w} role="tab" aria-selected={when === w} className={when === w ? 'on' : ''} onClick={() => set('when', w)}>
-            {w[0]!.toUpperCase() + w.slice(1)}<span className="count">{countFor(w)}</span>
+            {tabLabel[w]}<span className="count">{inTab(w).length}</span>
           </button>
         ))}
       </div>
 
       <div className="spread" style={{ marginBottom: 16 }}>
-        <div className="segmented" role="group" aria-label="Filter by type">
-          {TYPES.map((t) => (
-            <button key={t.key} className={type === t.key ? 'on' : ''} onClick={() => set('type', t.key)}>{t.label}</button>
-          ))}
-        </div>
-        <input className="input" style={{ maxWidth: 260 }} placeholder="Search activities…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search activities" />
+        {!isMeetings ? (
+          <div className="segmented" role="group" aria-label="Filter by type">
+            {(['all', 'drive', 'fundraiser', 'event'] as const).map((t) => (
+              <button key={t} className={type === t ? 'on' : ''} onClick={() => set('type', t)}>{t === 'all' ? 'All' : t === 'drive' ? 'Drives' : t === 'fundraiser' ? 'Fundraisers' : 'Events'}</button>
+            ))}
+          </div>
+        ) : <span />}
+        <input className="input" style={{ maxWidth: 260 }} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
       </div>
 
       {list.length === 0 ? (
-        <div className="card"><Empty title={`No ${when} activities`} icon={<IconCalendar />}>{isCore && when === 'upcoming' ? 'Create one with “New activity”.' : 'Check back later.'}</Empty></div>
+        <div className="card"><Empty title={`No ${tabLabel[when].toLowerCase()} ${isMeetings ? 'meetings' : 'activities'}`} icon={isMeetings ? <IconVideo /> : <IconCalendar />}>Check back later.</Empty></div>
       ) : (
         <div className="activity-grid">
           {list.map((a) => (
@@ -81,7 +93,11 @@ export function ActivitiesPage() {
               key={a.id}
               a={a}
               mine={mine.get(a.id)}
-              extra={isCore ? <span className="small muted">{counts.get(a.id) ?? 0}{a.capacity ? ` / ${a.capacity}` : ''} approved</span> : null}
+              extra={
+                a.type === 'meeting'
+                  ? <span className="small muted">{AUDIENCE_LABEL[a.audience].replace(' meeting', '')}{a.departmentId && (a.audience === 'department' || a.audience === 'volunteers') ? ` · ${departmentById.get(a.departmentId)?.name ?? ''}` : ''}</span>
+                  : <span className="small muted">{counts.get(a.id) ?? 0}{a.capacity ? ` / ${a.capacity}` : ''} volunteers</span>
+              }
             />
           ))}
         </div>

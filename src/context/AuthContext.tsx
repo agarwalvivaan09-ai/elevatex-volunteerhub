@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { fromFirestore } from '../lib/api';
+import { access } from '../lib/access';
 import type { UserProfile } from '../lib/types';
 
 type AuthState =
@@ -48,15 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export const useAuthState = () => useContext(AuthContext);
 
-/** Only call inside the signed-in area of the app. */
+/** Only call inside the signed-in area of the app. `can` describes what this person may do. */
 export function useMe() {
   const s = useContext(AuthContext);
   if (s.status !== 'active') throw new Error('useMe used outside an active session');
   const { profile } = s;
-  return {
-    user: s.user,
-    profile,
-    isAdmin: profile.role === 'admin',
-    isCore: profile.role === 'core' || profile.role === 'admin',
-  };
+  const can = useMemo(() => access(profile), [profile]);
+  return { user: s.user, profile, can };
 }

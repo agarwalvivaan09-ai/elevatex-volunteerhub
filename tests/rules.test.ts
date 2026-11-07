@@ -1,24 +1,30 @@
 /**
- * Security-rule tests. Run with: npm run test:rules (starts the Firestore emulator).
+ * Security-rule tests for the ElevateX hierarchy. Run with: npm run test:rules
  */
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { deleteDoc, doc, getDoc, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
 
 let env: RulesTestEnvironment;
 const future = Timestamp.fromDate(new Date(Date.now() + 7 * 86400000));
 const past = Timestamp.fromDate(new Date(Date.now() - 86400000));
 
-const profile = (role: string, extra = {}) => ({ name: role, email: `${role}@x.org`, role, status: 'active', positionId: null, bio: null, responsibilities: null, ...extra });
-const activity = (extra = {}) => ({ title: 'Drive', type: 'drive', status: 'upcoming', startAt: future, endAt: null, credits: 1, openForRequests: true, createdBy: 'core', ...extra });
-const part = (uid: string, aid = 'a1', extra = {}) => ({
-  activityId: aid, uid, status: 'requested', source: 'request', note: null, assignment: null, reviewNote: null, reviewedBy: null, reviewedAt: null,
-  attendance: null, attendanceBy: null, hoursLogged: null, hoursNote: null, hoursStatus: 'none', verifiedHours: null, credits: 0, verifiedBy: null, verifiedAt: null, ...extra,
+const user = (role: string, extra: Record<string, unknown> = {}) => ({ name: role, email: `${role}@x.org`, role, status: 'active', positionId: null, departmentId: null, title: null, bio: null, responsibilities: null, ...extra });
+const act = (extra: Record<string, unknown> = {}) => ({
+  title: 'Drive', type: 'drive', status: 'upcoming', startAt: future, endAt: null, credits: 1, openForRequests: true,
+  audience: 'all', mode: 'in_person', mapUrl: 'https://maps.app.goo.gl/x', meetingUrl: null, departmentId: 'drive-execution', leadUid: null, createdBy: 'chair', ...extra,
 });
-const plan = { plannedVolunteers: 40, plannedHours: 4, impactTarget: 1000, impactUnit: 'meals', budget: 60000, normalCost: 53.42, hasPartner: 1 };
+const part = (uid: string, aid: string, extra: Record<string, unknown> = {}) => ({
+  activityId: aid, uid, status: 'approved', source: 'volunteer', note: null, assignment: null, reviewNote: null, reviewedBy: null, reviewedAt: null,
+  attendance: null, hoursLogged: null, hoursNote: null, hoursStatus: 'none', verifiedHours: null, credits: 0, ...extra,
+});
+const task = (assigneeUid: string, departmentId: string | null, createdBy: string) => ({ title: 'Edit reel', description: null, assigneeUid, departmentId, dueAt: null, status: 'todo', progressNote: null, createdBy });
+const plan = { plannedVolunteers: 10, plannedHours: 3, impactTarget: 100, impactUnit: 'meals', budget: 5000, normalCost: 53.42, hasPartner: 0 };
 
 const as = (uid: string) => env.authenticatedContext(uid, { email: `${uid}@x.org` }).firestore();
+const seed = (fn: (db: ReturnType<RulesTestEnvironment['unauthenticatedContext']>['firestore'] extends () => infer D ? D : never) => Promise<unknown>) =>
+  env.withSecurityRulesDisabled((ctx) => fn(ctx.firestore() as never) as Promise<void>);
 
 beforeAll(async () => {
   env = await initializeTestEnvironment({ projectId: 'demo-elevatex', firestore: { rules: readFileSync('firestore.rules', 'utf8') } });
@@ -27,133 +33,158 @@ afterAll(() => env.cleanup());
 
 beforeEach(async () => {
   await env.clearFirestore();
-  await env.withSecurityRulesDisabled(async (ctx) => {
-    const db = ctx.firestore();
-    await setDoc(doc(db, 'meta/bootstrap'), { adminUid: 'admin' });
-    await setDoc(doc(db, 'users/admin'), profile('admin'));
-    await setDoc(doc(db, 'users/core'), profile('core'));
-    await setDoc(doc(db, 'users/member'), profile('member'));
-    await setDoc(doc(db, 'users/other'), profile('member', { name: 'other', email: 'other@x.org' }));
-    await setDoc(doc(db, 'users/gone'), profile('member', { status: 'removed', email: 'gone@x.org' }));
-    await setDoc(doc(db, 'activities/a1'), activity());
-    await setDoc(doc(db, 'activities/past'), activity({ startAt: past }));
-    await setDoc(doc(db, 'participations/a1_other'), part('other', 'a1', { status: 'approved', attendance: 'present' }));
+  await seed(async (db) => {
+    await setDoc(doc(db, 'meta/bootstrap'), { adminUid: 'chair' });
+    await setDoc(doc(db, 'users/chair'), user('chairman'));
+    await setDoc(doc(db, 'users/vice'), user('vice_chairman'));
+    await setDoc(doc(db, 'users/ceo'), user('executive'));
+    await setDoc(doc(db, 'users/board'), user('board'));
+    await setDoc(doc(db, 'users/cmo'), user('hod', { departmentId: 'marketing' }));
+    await setDoc(doc(db, 'users/drivehead'), user('hod', { departmentId: 'drive-execution' }));
+    await setDoc(doc(db, 'users/hrhead'), user('hod', { departmentId: 'hr' }));
+    await setDoc(doc(db, 'users/mkt'), user('member', { departmentId: 'marketing' }));
+    await setDoc(doc(db, 'users/fin'), user('member', { departmentId: 'finance' }));
+    await setDoc(doc(db, 'users/hrmember'), user('member', { departmentId: 'hr' }));
+    await setDoc(doc(db, 'activities/a1'), act());
+    await setDoc(doc(db, 'activities/mine'), act({ createdBy: 'fin', leadUid: 'fin', departmentId: 'drive-execution' }));
+    await setDoc(doc(db, 'activities/done'), act({ status: 'completed', startAt: past }));
+    await setDoc(doc(db, 'participations/done_mkt'), part('mkt', 'done', { attendance: 'present' }));
+    await setDoc(doc(db, 'participations/mine_mkt'), part('mkt', 'mine'));
+    await setDoc(doc(db, 'edpi/done'), { plan, locked: true, results: null });
   });
 });
 
-describe('bootstrap', () => {
-  it('cannot claim admin once an admin exists', async () => {
-    await env.withSecurityRulesDisabled((ctx) => deleteDoc(doc(ctx.firestore(), 'users/member')));
-    const db = as('member');
-    const b = writeBatch(db);
-    b.set(doc(db, 'users/member'), profile('admin', { email: 'member@x.org' }));
-    b.set(doc(db, 'meta/bootstrap'), { adminUid: 'member' });
-    await assertFails(b.commit());
+describe('people management', () => {
+  it('only Chairman and Vice Chairman can add people', async () => {
+    await assertSucceeds(setDoc(doc(as('chair'), 'users/n1'), user('member', { email: 'n1@x.org' })));
+    await assertSucceeds(setDoc(doc(as('vice'), 'users/n2'), user('hod', { email: 'n2@x.org', departmentId: 'finance' })));
+    await assertFails(setDoc(doc(as('ceo'), 'users/n3'), user('member', { email: 'n3@x.org' })));
+    await assertFails(setDoc(doc(as('board'), 'users/n4'), user('member', { email: 'n4@x.org' })));
+    await assertFails(setDoc(doc(as('cmo'), 'users/n5'), user('member', { email: 'n5@x.org' })));
   });
-  it('first user can claim admin when none exists', async () => {
-    await env.withSecurityRulesDisabled((ctx) => deleteDoc(doc(ctx.firestore(), 'meta/bootstrap')));
-    const db = as('newbie');
-    const b = writeBatch(db);
-    b.set(doc(db, 'users/newbie'), profile('admin', { email: 'newbie@x.org' }));
-    b.set(doc(db, 'meta/bootstrap'), { adminUid: 'newbie' });
-    await assertSucceeds(b.commit());
+  it('nobody can create another Chairman; only the Chairman appoints a Vice Chairman', async () => {
+    await assertFails(setDoc(doc(as('vice'), 'users/x'), user('chairman', { email: 'x@x.org' })));
+    await assertFails(setDoc(doc(as('vice'), 'users/y'), user('vice_chairman', { email: 'y@x.org' })));
+    await assertSucceeds(setDoc(doc(as('chair'), 'users/z'), user('vice_chairman', { email: 'z@x.org' })));
   });
-});
-
-describe('users & permissions', () => {
-  it('member can edit own name/bio but not role, position or status', async () => {
-    const db = as('member');
-    await assertSucceeds(updateDoc(doc(db, 'users/member'), { name: 'New Name', bio: 'hi' }));
-    await assertFails(updateDoc(doc(db, 'users/member'), { role: 'core' }));
-    await assertFails(updateDoc(doc(db, 'users/member'), { positionId: 'president' }));
-    await assertFails(updateDoc(doc(db, 'users/other'), { name: 'x' }));
+  it('Vice Chairman cannot touch the Chairman; Chairman cannot lose access', async () => {
+    await assertFails(updateDoc(doc(as('vice'), 'users/chair'), { status: 'removed' }));
+    await assertFails(updateDoc(doc(as('chair'), 'users/chair'), { role: 'member' }));
+    await assertSucceeds(updateDoc(doc(as('chair'), 'users/chair'), { title: 'Founder, Former CEO & Chairman' }));
   });
-  it('core cannot change access levels or remove anyone', async () => {
-    const db = as('core');
-    await assertFails(updateDoc(doc(db, 'users/member'), { role: 'core' }));
-    await assertFails(updateDoc(doc(db, 'users/admin'), { status: 'removed' }));
-    await assertFails(setDoc(doc(db, 'users/x'), profile('member', { email: 'x@x.org' })));
+  it('people admins promote members; members only edit name/bio', async () => {
+    await assertSucceeds(updateDoc(doc(as('vice'), 'users/mkt'), { role: 'hod', positionId: 'cmo' }));
+    await assertFails(updateDoc(doc(as('fin'), 'users/fin'), { role: 'hod' }));
+    await assertSucceeds(updateDoc(doc(as('fin'), 'users/fin'), { bio: 'hello' }));
   });
-  it('admin manages members but cannot create admins or demote the admin', async () => {
-    const db = as('admin');
-    await assertSucceeds(updateDoc(doc(db, 'users/member'), { role: 'core', positionId: 'finance' }));
-    await assertSucceeds(updateDoc(doc(db, 'users/other'), { status: 'removed' }));
-    await assertSucceeds(setDoc(doc(db, 'users/new'), profile('member', { email: 'new@x.org' })));
-    await assertFails(updateDoc(doc(db, 'users/core'), { role: 'admin' }));
-    await assertFails(updateDoc(doc(db, 'users/admin'), { role: 'member' }));
-  });
-  it('removed users are locked out', async () => {
-    const db = as('gone');
-    await assertSucceeds(getDoc(doc(db, 'users/gone')));
-    await assertFails(getDoc(doc(db, 'activities/a1')));
-  });
-  it('only admin edits positions', async () => {
-    await assertFails(setDoc(doc(as('core'), 'positions/p'), { title: 'x' }));
-    await assertSucceeds(setDoc(doc(as('admin'), 'positions/p'), { title: 'x' }));
-  });
-  it('private contact readable by owner and core, not other members', async () => {
-    await assertSucceeds(setDoc(doc(as('member'), 'users/member/private/contact'), { phone: '1' }));
-    await assertSucceeds(getDoc(doc(as('core'), 'users/member/private/contact')));
-    await assertFails(getDoc(doc(as('other'), 'users/member/private/contact')));
+  it('legacy admin migrates itself to chairman', async () => {
+    await seed((db) => setDoc(doc(db, 'users/legacy'), user('admin', { email: 'legacy@x.org' })));
+    await assertSucceeds(updateDoc(doc(as('legacy'), 'users/legacy'), { role: 'chairman' }));
   });
 });
 
 describe('activities', () => {
-  it('members cannot create activities; core can; only admin deletes', async () => {
-    await assertFails(setDoc(doc(as('member'), 'activities/x'), activity({ createdBy: 'member' })));
-    await assertSucceeds(setDoc(doc(as('core'), 'activities/x'), activity()));
-    await assertFails(deleteDoc(doc(as('core'), 'activities/x')));
-    await assertSucceeds(deleteDoc(doc(as('admin'), 'activities/x')));
+  it('members can only PROPOSE drives', async () => {
+    await assertFails(setDoc(doc(as('fin'), 'activities/x'), act({ createdBy: 'fin' })));
+    await assertSucceeds(setDoc(doc(as('fin'), 'activities/x'), act({ createdBy: 'fin', status: 'proposed' })));
+  });
+  it('drive head and leadership publish drives directly; other heads propose', async () => {
+    await assertSucceeds(setDoc(doc(as('drivehead'), 'activities/d1'), act({ createdBy: 'drivehead' })));
+    await assertSucceeds(setDoc(doc(as('board'), 'activities/d2'), act({ createdBy: 'board' })));
+    await assertFails(setDoc(doc(as('cmo'), 'activities/d3'), act({ createdBy: 'cmo' })));
+  });
+  it('core team approves a proposal, but not their own', async () => {
+    await seed((db) => setDoc(doc(db, 'activities/p'), act({ createdBy: 'fin', status: 'proposed' })));
+    await assertFails(updateDoc(doc(as('fin'), 'activities/p'), { status: 'upcoming' }));
+    await assertSucceeds(updateDoc(doc(as('cmo'), 'activities/p'), { status: 'upcoming' }));
+    await seed((db) => setDoc(doc(db, 'activities/p2'), act({ createdBy: 'cmo', status: 'proposed', departmentId: 'marketing' })));
+    await assertFails(updateDoc(doc(as('cmo'), 'activities/p2'), { status: 'upcoming' }));
+  });
+  it('fundraisers: core team only', async () => {
+    await assertFails(setDoc(doc(as('fin'), 'activities/f'), act({ type: 'fundraiser', createdBy: 'fin' })));
+    await assertSucceeds(setDoc(doc(as('cmo'), 'activities/f'), act({ type: 'fundraiser', createdBy: 'cmo' })));
+  });
+  it('meetings: who can call which', async () => {
+    const m = (by: string, audience: string, departmentId: string | null = null) => act({ type: 'meeting', audience, departmentId, createdBy: by, mode: 'online', mapUrl: null, meetingUrl: 'https://meet.google.com/abc' });
+    await assertSucceeds(setDoc(doc(as('ceo'), 'activities/m1'), m('ceo', 'all')));
+    await assertFails(setDoc(doc(as('board'), 'activities/m2'), m('board', 'all')));
+    await assertSucceeds(setDoc(doc(as('board'), 'activities/m3'), m('board', 'board')));
+    await assertSucceeds(setDoc(doc(as('cmo'), 'activities/m4'), m('cmo', 'department', 'marketing')));
+    await assertFails(setDoc(doc(as('cmo'), 'activities/m5'), m('cmo', 'department', 'finance')));
+    await assertFails(setDoc(doc(as('fin'), 'activities/m6'), m('fin', 'department', 'finance')));
+  });
+  it('online needs a meeting link, in person needs a maps link', async () => {
+    await assertFails(setDoc(doc(as('ceo'), 'activities/n'), act({ createdBy: 'ceo', mapUrl: null })));
+    await assertFails(setDoc(doc(as('ceo'), 'activities/n'), act({ createdBy: 'ceo', mode: 'online', meetingUrl: 'meet.google.com/x' })));
+  });
+  it('heads cannot edit other departments\' activities', async () => {
+    await assertFails(updateDoc(doc(as('cmo'), 'activities/a1'), { title: 'x' }));
+    await assertSucceeds(updateDoc(doc(as('drivehead'), 'activities/a1'), { title: 'x' }));
   });
 });
 
-describe('participation flow', () => {
-  it('member can request, but not self-approve', async () => {
-    const db = as('member');
-    await assertFails(setDoc(doc(db, 'participations/a1_member'), part('member', 'a1', { status: 'approved' })));
-    await assertSucceeds(setDoc(doc(db, 'participations/a1_member'), part('member')));
-    await assertFails(updateDoc(doc(db, 'participations/a1_member'), { status: 'approved' }));
+describe('volunteering', () => {
+  it('one click volunteer; organiser (a plain member) sees and manages the list', async () => {
+    await assertSucceeds(setDoc(doc(as('hrmember'), 'participations/a1_hrmember'), part('hrmember', 'a1')));
+    await assertSucceeds(getDocs(query(collection(as('fin'), 'participations'), where('activityId', '==', 'mine'))));
+    await assertSucceeds(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { attendance: 'present' }));
+    await assertFails(getDocs(query(collection(as('hrmember'), 'participations'), where('activityId', '==', 'mine'))));
   });
-  it('cannot request for someone else or for a past activity', async () => {
-    await assertFails(setDoc(doc(as('member'), 'participations/a1_core'), part('core')));
-    await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'activities/past'), { status: 'completed' }));
-    await assertFails(setDoc(doc(as('member'), 'participations/past_member'), part('member', 'past')));
-  });
-  it("members only see their own records", async () => {
-    await assertFails(getDoc(doc(as('member'), 'participations/a1_other')));
-    await assertSucceeds(getDoc(doc(as('other'), 'participations/a1_other')));
-    await assertSucceeds(getDoc(doc(as('core'), 'participations/a1_other')));
-  });
-  it('member can log hours only after being marked present, and cannot verify them', async () => {
-    const db = as('other');
-    await assertFails(updateDoc(doc(db, 'participations/a1_other'), { hoursLogged: 30, hoursStatus: 'pending' }));
-    await assertSucceeds(updateDoc(doc(db, 'participations/a1_other'), { hoursLogged: 3, hoursStatus: 'pending' }));
-    await assertFails(updateDoc(doc(db, 'participations/a1_other'), { hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
-    await assertFails(updateDoc(doc(db, 'participations/a1_other'), { attendance: 'present', credits: 5 }));
-  });
-  it('core cannot verify hours unless attendance is present', async () => {
-    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'participations/a1_member'), part('member', 'a1', { status: 'approved' })));
-    await assertFails(updateDoc(doc(as('core'), 'participations/a1_member'), { hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
-    await assertSucceeds(updateDoc(doc(as('core'), 'participations/a1_member'), { attendance: 'present', hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
+  it('organiser cannot verify their own hours', async () => {
+    await seed((db) => setDoc(doc(db, 'participations/mine_fin'), part('fin', 'mine', { attendance: 'present' })));
+    await assertFails(updateDoc(doc(as('fin'), 'participations/mine_fin'), { hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
+    await assertSucceeds(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { attendance: 'present', hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
   });
 });
 
 describe('EDPI', () => {
-  it('members cannot read or write EDPI', async () => {
-    await assertFails(setDoc(doc(as('member'), 'edpi/a1'), { plan, locked: false, results: null }));
-    await assertFails(getDoc(doc(as('member'), 'edpi/a1')));
+  it('volunteers who attended a completed drive can enter results; others cannot', async () => {
+    await assertSucceeds(updateDoc(doc(as('mkt'), 'edpi/done'), { results: { spent: 1 } }));
+    await assertFails(updateDoc(doc(as('fin'), 'edpi/done'), { results: { spent: 1 } }));
+    await assertFails(updateDoc(doc(as('mkt'), 'edpi/done'), { plan: { ...plan, budget: 1 } }));
   });
-  it('plan is editable before lock, frozen after lock, never unlocked', async () => {
-    const db = as('core');
-    await assertSucceeds(setDoc(doc(db, 'edpi/a1'), { plan, locked: false, results: null }));
-    await assertSucceeds(updateDoc(doc(db, 'edpi/a1'), { plan: { ...plan, budget: 50000 } }));
-    await assertFails(updateDoc(doc(db, 'edpi/a1'), { results: { spent: 1 } }));
-    await assertSucceeds(updateDoc(doc(db, 'edpi/a1'), { locked: true }));
-    await assertFails(updateDoc(doc(db, 'edpi/a1'), { plan: { ...plan, budget: 1 } }));
-    await assertFails(updateDoc(doc(db, 'edpi/a1'), { locked: false }));
-    await assertSucceeds(updateDoc(doc(db, 'edpi/a1'), { results: { spent: 1 } }));
+  it('plan cannot be unlocked', async () => {
+    await assertFails(updateDoc(doc(as('chair'), 'edpi/done'), { locked: false }));
   });
-  it('no plan can be created after the drive has started', async () => {
-    await assertFails(setDoc(doc(as('core'), 'edpi/past'), { plan, locked: false, results: null }));
+});
+
+describe('tasks', () => {
+  it('heads assign only within their department', async () => {
+    await assertSucceeds(setDoc(doc(as('cmo'), 'tasks/t1'), task('mkt', 'marketing', 'cmo')));
+    await assertFails(setDoc(doc(as('cmo'), 'tasks/t2'), task('fin', 'marketing', 'cmo')));
+    await assertFails(setDoc(doc(as('cmo'), 'tasks/t3'), task('fin', 'finance', 'cmo')));
+    await assertFails(setDoc(doc(as('mkt'), 'tasks/t4'), task('fin', null, 'mkt')));
+    await assertSucceeds(setDoc(doc(as('board'), 'tasks/t5'), task('fin', 'finance', 'board')));
+  });
+  it('assignee updates status only; others cannot read', async () => {
+    await seed((db) => setDoc(doc(db, 'tasks/t'), task('mkt', 'marketing', 'cmo')));
+    await assertSucceeds(updateDoc(doc(as('mkt'), 'tasks/t'), { status: 'done', progressNote: 'Posted' }));
+    await assertFails(updateDoc(doc(as('mkt'), 'tasks/t'), { title: 'x' }));
+    await assertFails(getDoc(doc(as('fin'), 'tasks/t')));
+    await assertFails(getDoc(doc(as('hrhead'), 'tasks/t')));
+    await assertSucceeds(getDoc(doc(as('cmo'), 'tasks/t')));
+  });
+});
+
+describe('HR feedback', () => {
+  it('HR department and leadership read feedback; other members do not', async () => {
+    await assertSucceeds(setDoc(doc(as('fin'), 'feedback/f1'), { authorUid: 'fin', rating: 4, category: 'general', message: 'Good', status: 'new', hrNote: null }));
+    await assertSucceeds(getDoc(doc(as('hrmember'), 'feedback/f1')));
+    await assertSucceeds(getDoc(doc(as('board'), 'feedback/f1')));
+    await assertFails(getDoc(doc(as('mkt'), 'feedback/f1')));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'feedback/f1'), { status: 'reviewed' }));
+  });
+});
+
+describe('notifications', () => {
+  it('only the recipient reads them', async () => {
+    const cdb = as('cmo');
+    const b = writeBatch(cdb);
+    b.set(doc(cdb, 'notifications/n1'), { uid: 'mkt', title: 'New task', body: null, link: '/tasks', kind: 'task', read: false, createdBy: 'cmo' });
+    await assertSucceeds(b.commit());
+    await assertSucceeds(getDoc(doc(as('mkt'), 'notifications/n1')));
+    await assertFails(getDoc(doc(as('fin'), 'notifications/n1')));
+    await assertSucceeds(updateDoc(doc(as('mkt'), 'notifications/n1'), { read: true }));
+    await assertFails(deleteDoc(doc(as('fin'), 'notifications/n1')));
   });
 });

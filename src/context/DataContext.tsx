@@ -3,12 +3,11 @@ import { collection, onSnapshot, query, where, type Query } from 'firebase/fires
 import { db } from '../lib/firebase';
 import { fromFirestore } from '../lib/api';
 import { useMe } from './AuthContext';
-import type { Activity, Department, EdpiRecord, Participation, Position, UserProfile } from '../lib/types';
+import type { Activity, AppNotification, Department, EdpiRecord, Feedback, Participation, Position, Task, UserProfile } from '../lib/types';
 
 /**
  * Live, shared data for the whole signed-in app. Every list is a realtime
- * Firestore listener, so a change made by anyone shows up everywhere
- * immediately without refreshing.
+ * Firestore listener, so a change made by anyone shows up everywhere immediately.
  */
 interface Data {
   ready: boolean;
@@ -16,10 +15,13 @@ interface Data {
   positions: Position[];
   departments: Department[];
   activities: Activity[];
-  /** Core/Admin: every record. Member: only their own. */
+  /** Core team: every record. Others: their own. Organisers load their activity's list on its page. */
   participations: Participation[];
-  /** Core/Admin only. */
+  /** Core team only. Others load a single record on the drive page. */
   edpi: EdpiRecord[];
+  tasks: Task[];
+  notifications: AppNotification[];
+  feedback: Feedback[];
   userById: Map<string, UserProfile>;
   positionById: Map<string, Position>;
   departmentById: Map<string, Department>;
@@ -29,7 +31,7 @@ interface Data {
 const DataContext = createContext<Data | null>(null);
 
 /** Subscribes to a query while `key` stays the same; `key === null` means "don't subscribe". */
-function useLive<T>(key: string | null, make: () => Query, sort?: (a: T, b: T) => number): [T[], boolean] {
+export function useLive<T>(key: string | null, make: () => Query, sort?: (a: T, b: T) => number): [T[], boolean] {
   const [rows, setRows] = useState<T[]>([]);
   const [ready, setReady] = useState(key === null);
   useEffect(() => {
@@ -38,6 +40,7 @@ function useLive<T>(key: string | null, make: () => Query, sort?: (a: T, b: T) =
       setReady(true);
       return;
     }
+    setReady(false);
     return onSnapshot(
       make(),
       (snap) => {
@@ -56,35 +59,62 @@ function useLive<T>(key: string | null, make: () => Query, sort?: (a: T, b: T) =
   return [rows, ready];
 }
 
-export function DataProvider({ children }: { children: ReactNode }) {
-  const { profile, isCore } = useMe();
+const byCreatedDesc = (a: { createdAt?: Date | null }, b: { createdAt?: Date | null }) => (b.createdAt?.getTime() ?? Date.now()) - (a.createdAt?.getTime() ?? Date.now());
 
+export function DataProvider({ children }: { children: ReactNode }) {
+  const { profile, can } = useMe();
+  const me = profile.id;
   const col = (name: string) => () => collection(db, name);
+
   const [users, r1] = useLive<UserProfile>('users', col('users'), (a, b) => a.name.localeCompare(b.name));
   const [positions, r2] = useLive<Position>('positions', col('positions'), (a, b) => a.order - b.order);
   const [departments, r3] = useLive<Department>('departments', col('departments'), (a, b) => a.order - b.order);
   const [activities, r4] = useLive<Activity>('activities', col('activities'), (a, b) => a.startAt.getTime() - b.startAt.getTime());
   const [participations, r5] = useLive<Participation>(
-    isCore ? 'participations:all' : `participations:${profile.id}`,
-    isCore ? col('participations') : () => query(collection(db, 'participations'), where('uid', '==', profile.id)),
+    can.isCore ? 'participations:all' : `participations:${me}`,
+    can.isCore ? col('participations') : () => query(collection(db, 'participations'), where('uid', '==', me)),
   );
-  const [edpi, r6] = useLive<EdpiRecord>(isCore ? 'edpi' : null, col('edpi'));
+  const [edpi, r6] = useLive<EdpiRecord>(can.isCore ? 'edpi' : null, col('edpi'));
+
+  // Tasks: Leadership sees all; Heads see their department; everyone sees tasks assigned to or created by them.
+  const [tasksAll, t1] = useLive<Task>(can.isLeadership ? 'tasks:all' : null, col('tasks'));
+  const [tasksDept, t2] = useLive<Task>(!can.isLeadership && can.isHod && can.dept ? `tasks:dept:${can.dept}` : null, () => query(collection(db, 'tasks'), where('departmentId', '==', can.dept)));
+  const [tasksMine, t3] = useLive<Task>(can.isLeadership ? null : `tasks:mine:${me}`, () => query(collection(db, 'tasks'), where('assigneeUid', '==', me)));
+  const [tasksByMe, t4] = useLive<Task>(can.isLeadership ? null : `tasks:by:${me}`, () => query(collection(db, 'tasks'), where('createdBy', '==', me)));
+
+  const [notifications, r7] = useLive<AppNotification>(`notifications:${me}`, () => query(collection(db, 'notifications'), where('uid', '==', me)), byCreatedDesc);
+  const [feedback, r8] = useLive<Feedback>(
+    can.canSeeFeedback ? 'feedback:all' : `feedback:${me}`,
+    can.canSeeFeedback ? col('feedback') : () => query(collection(db, 'feedback'), where('authorUid', '==', me)),
+    byCreatedDesc,
+  );
+
+  const tasks = useMemo(() => {
+    const m = new Map<string, Task>();
+    for (const t of [...tasksAll, ...tasksDept, ...tasksMine, ...tasksByMe]) m.set(t.id, t);
+    return [...m.values()].sort((a, b) => (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity));
+  }, [tasksAll, tasksDept, tasksMine, tasksByMe]);
+
+  const ready = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && t1 && t2 && t3 && t4;
 
   const value = useMemo<Data>(
     () => ({
-      ready: r1 && r2 && r3 && r4 && r5 && r6,
+      ready,
       users,
       positions,
       departments,
       activities,
       participations,
       edpi,
+      tasks,
+      notifications,
+      feedback,
       userById: new Map(users.map((u) => [u.id, u])),
       positionById: new Map(positions.map((p) => [p.id, p])),
       departmentById: new Map(departments.map((d) => [d.id, d])),
       activityById: new Map(activities.map((a) => [a.id, a])),
     }),
-    [users, positions, departments, activities, participations, edpi, r1, r2, r3, r4, r5, r6],
+    [ready, users, positions, departments, activities, participations, edpi, tasks, notifications, feedback],
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

@@ -1,119 +1,186 @@
 rules_version = '2';
 
-// ElevateX Hub — Firestore security rules.
-// These rules are the real permission system. The UI hides buttons, but these rules
-// are what stop a Member from approving their own request or a Core member from
-// changing someone's access level, even if they bypass the UI.
+// ElevateX Hub — Firestore security rules (the real permission system).
 //
-// Roles:   admin  — full control (one account, the owner)
-//          core   — manages activities, requests, attendance, hours, EDPI
-//          member — own dashboard, request to join, log own hours
+// Access comes from a member's `role` and `departmentId`:
+//   chairman, vice_chairman ........ full access + manage people (add, remove, positions)
+//   executive (CEO, COO) ........... full access (no people management)
+//   board (Board of Advisors) ...... full view; drives, fundraisers, tasks, board meetings
+//   hod (Head of Department) ....... scoped to their own department
+//   member ......................... own dashboard, volunteer, propose drives, log hours
 //
-// A user whose profile status is "removed" can only read their own profile.
+//   "Top"        = chairman, vice chairman, CEO, COO
+//   "Leadership" = Top + Board of Advisors
+//   "Core team"  = Leadership + Heads of Department
+//
+// Legacy roles from v1 are mapped: admin → chairman, core → member.
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ---------- helpers ----------
+    // ---------------------------------------------------------------- helpers
     function signedIn() { return request.auth != null; }
-    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
-    function me() { return get(userPath(request.auth.uid)).data; }
-    function isActive() { return signedIn() && exists(userPath(request.auth.uid)) && me().status == 'active'; }
-    function isAdmin() { return isActive() && me().role == 'admin'; }
-    function isCore() { return isActive() && me().role in ['core', 'admin']; }
+    function uid() { return request.auth.uid; }
+    function userPath(id) { return /databases/$(database)/documents/users/$(id); }
+    function me() { return get(userPath(uid())).data; }
+    function isActive() { return signedIn() && exists(userPath(uid())) && me().status == 'active'; }
+    function myRole() { return me().role; }
+    function myDept() { return me().get('departmentId', null); }
+
+    function isChair() { return isActive() && myRole() in ['chairman', 'admin']; }
+    function isPeopleAdmin() { return isActive() && myRole() in ['chairman', 'admin', 'vice_chairman']; }
+    function isTop() { return isActive() && myRole() in ['chairman', 'admin', 'vice_chairman', 'executive']; }
+    function isLeadership() { return isActive() && myRole() in ['chairman', 'admin', 'vice_chairman', 'executive', 'board']; }
+    function isHod() { return isActive() && myRole() == 'hod'; }
+    function isHodOf(d) { return isHod() && myDept() == d; }
+    function isCore() { return isLeadership() || isHod(); }
+    function inHr() { return isActive() && myDept() == 'hr'; }
+
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
     function str(v, max) { return v is string && v.size() <= max; }
     function optStr(v, max) { return v == null || str(v, max); }
+    function httpsUrl(v) { return v is string && v.size() <= 600 && v.matches('https://.+'); }
 
-    // ---------- bootstrap: the very first admin ----------
-    // meta/bootstrap can be created exactly once, in the same batch as the
-    // creator's own admin profile. After that, admin can only be granted from the
-    // Firebase console.
+    // ---------------------------------------------------------------- bootstrap
+    // The first account becomes Chairman, exactly once.
     match /meta/bootstrap {
       allow read: if signedIn();
       allow create: if signedIn()
-        && request.resource.data.adminUid == request.auth.uid
-        && existsAfter(userPath(request.auth.uid))
-        && getAfter(userPath(request.auth.uid)).data.role == 'admin';
+        && request.resource.data.adminUid == uid()
+        && getAfter(userPath(uid())).data.role == 'chairman';
       allow update, delete: if false;
     }
 
-    // ---------- users ----------
+    // ---------------------------------------------------------------- users
     function validProfile(d) {
       return str(d.name, 120) && d.name.size() > 0
         && str(d.email, 200)
-        && d.role in ['admin', 'core', 'member']
+        && d.role in ['chairman', 'vice_chairman', 'executive', 'board', 'hod', 'member', 'admin', 'core']
         && d.status in ['active', 'removed']
         && (d.positionId == null || d.positionId is string)
+        && (d.get('departmentId', null) == null || d.get('departmentId', null) is string)
+        && optStr(d.get('title', null), 120)
         && optStr(d.get('bio', null), 1000)
         && optStr(d.get('responsibilities', null), 2000);
     }
+    function isChairDoc(d) { return d.role in ['chairman', 'admin']; }
 
-    match /users/{uid} {
-      allow read: if isActive() || (signedIn() && request.auth.uid == uid);
+    match /users/{id} {
+      allow read: if isActive() || (signedIn() && uid() == id);
 
-      // Admin adds members (never as admin). Or: one-time bootstrap of the owner account.
       allow create: if validProfile(request.resource.data) && (
-        (isAdmin() && request.resource.data.role in ['core', 'member'])
-        || (signedIn() && request.auth.uid == uid
-            && request.resource.data.role == 'admin'
+        // Chairman / Vice Chairman add people. Only the Chairman can appoint a Vice Chairman.
+        (isPeopleAdmin() && request.resource.data.role in ['executive', 'board', 'hod', 'member'])
+        || (isChair() && request.resource.data.role == 'vice_chairman')
+        // One-time bootstrap of the Chairman account.
+        || (signedIn() && uid() == id
+            && request.resource.data.role == 'chairman'
             && request.resource.data.status == 'active'
             && !exists(/databases/$(database)/documents/meta/bootstrap)
-            && getAfter(/databases/$(database)/documents/meta/bootstrap).data.adminUid == uid)
+            && getAfter(/databases/$(database)/documents/meta/bootstrap).data.adminUid == id)
       );
 
-      allow update: if validProfile(request.resource.data) && request.resource.data.email == resource.data.email && (
-        // Members (and everyone) may edit only their own personal fields.
-        (isActive() && request.auth.uid == uid
-          && changed().hasOnly(['name', 'bio', 'updatedAt']))
-        // Admin manages everyone, but the admin account's role/status can never be
-        // changed from the app, and nobody can be made admin from the app.
-        || (isAdmin()
-          && request.resource.data.role in ['core', 'member', resource.data.role]
-          && (resource.data.role != 'admin'
-              || (request.resource.data.role == 'admin' && request.resource.data.status == 'active')))
-      );
+      allow update: if validProfile(request.resource.data)
+        && request.resource.data.email == resource.data.email && (
+          // Everyone: own personal fields only.
+          (isActive() && uid() == id && changed().hasOnly(['name', 'bio', 'updatedAt']))
+          // v1 → v2 migration: the original admin becomes Chairman.
+          || (isActive() && uid() == id && resource.data.role == 'admin' && request.resource.data.role == 'chairman'
+              && request.resource.data.status == 'active')
+          // The Chairman's own record: only the Chairman edits it, and can never lose access.
+          || (isChairDoc(resource.data) && isChair() && uid() == id
+              && isChairDoc(request.resource.data) && request.resource.data.status == 'active')
+          // Chairman / Vice Chairman manage everyone else. Nobody can be made Chairman;
+          // only the Chairman can appoint or change a Vice Chairman.
+          || (isPeopleAdmin() && !isChairDoc(resource.data) && !isChairDoc(request.resource.data)
+              && (isChair() || (resource.data.role != 'vice_chairman' && request.resource.data.role != 'vice_chairman')))
+        );
 
-      allow delete: if isAdmin() && resource.data.role != 'admin';
+      allow delete: if !isChairDoc(resource.data)
+        && (isChair() || (isPeopleAdmin() && resource.data.role != 'vice_chairman'));
 
-      // Private contact details: owner, Core and Admin can read; owner and Admin can write.
       match /private/{docId} {
-        allow read: if (isActive() && request.auth.uid == uid) || isCore();
-        allow write: if (isActive() && request.auth.uid == uid) || isAdmin();
+        allow read: if (isActive() && uid() == id) || isCore();
+        allow write: if (isActive() && uid() == id) || isPeopleAdmin();
       }
     }
 
-    // ---------- organisation structure ----------
+    // ---------------------------------------------------------------- structure
     match /departments/{id} {
       allow read: if isActive();
-      allow write: if isAdmin();
+      allow write: if isPeopleAdmin();
     }
     match /positions/{id} {
       allow read: if isActive();
-      allow write: if isAdmin();
+      allow write: if isPeopleAdmin();
     }
 
-    // ---------- activities: drives, fundraisers, events, meetings ----------
+    // ---------------------------------------------------------------- activities
+    // Drives, fundraisers, events and meetings. Every activity needs either a Google Maps
+    // link (in person) or a meeting link (online).
     function validActivity(d) {
       return str(d.title, 160) && d.title.size() > 0
         && d.type in ['drive', 'fundraiser', 'event', 'meeting']
-        && d.status in ['upcoming', 'completed', 'cancelled']
+        && d.status in ['proposed', 'upcoming', 'completed', 'cancelled', 'declined']
         && d.startAt is timestamp
         && d.credits is number && d.credits >= 0 && d.credits <= 10
-        && d.openForRequests is bool;
+        && d.openForRequests is bool
+        && d.audience in ['all', 'core', 'hod', 'board', 'department', 'volunteers']
+        && ((d.mode == 'online' && httpsUrl(d.meetingUrl)) || (d.mode == 'in_person' && httpsUrl(d.mapUrl)));
+    }
+
+    // Who may call which meeting.
+    function canMeet(d) {
+      return (d.audience in ['all', 'core', 'hod'] && isTop())
+        || (d.audience == 'board' && isLeadership())
+        || (d.audience in ['department', 'volunteers'] && (isLeadership() || (isHod() && d.departmentId == myDept())));
+    }
+
+    function canCreateKind(d) {
+      return (d.type == 'drive' && (d.status == 'proposed' || isLeadership() || isHodOf('drive-execution')))
+        || (d.type in ['fundraiser', 'event'] && isCore())
+        || (d.type == 'meeting' && canMeet(d));
+    }
+
+    // Organiser, creator, Leadership, or the Head of the activity's department.
+    function canManage(a) {
+      return isLeadership()
+        || (isActive() && (a.createdBy == uid() || a.get('leadUid', null) == uid()))
+        || (isHod() && a.get('departmentId', null) == myDept());
     }
 
     match /activities/{id} {
       allow read: if isActive();
-      allow create: if isCore() && validActivity(request.resource.data)
-        && request.resource.data.createdBy == request.auth.uid;
-      allow update: if isCore() && validActivity(request.resource.data)
-        && request.resource.data.createdBy == resource.data.createdBy;
-      allow delete: if isAdmin();
+
+      allow create: if isActive() && validActivity(request.resource.data)
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.status in ['proposed', 'upcoming']
+        && (request.resource.data.status == 'upcoming' || request.resource.data.type == 'drive')
+        && canCreateKind(request.resource.data);
+
+      // Any core-team member may approve or decline a proposed drive (not their own).
+      allow update: if isCore() && resource.data.status == 'proposed'
+        && request.resource.data.status in ['upcoming', 'declined']
+        && (resource.data.createdBy != uid() || isLeadership())
+        && changed().hasOnly(['status', 'reviewedBy', 'reviewNote', 'reviewedAt', 'updatedAt']);
+
+      allow update: if validActivity(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && canManage(resource.data)
+        && (request.resource.data.type == resource.data.type || isLeadership())
+        && (request.resource.data.type != 'meeting' || canMeet(request.resource.data))
+        // A proposed drive can only be approved/declined by the core team, and not by the person who proposed it.
+        && (resource.data.status != 'proposed' || request.resource.data.status == 'proposed'
+            || (isCore() && (resource.data.createdBy != uid() || isLeadership())))
+        && (resource.data.status != 'declined' || isCore())
+        && (request.resource.data.status != 'proposed' || resource.data.status == 'proposed');
+
+      allow delete: if isLeadership()
+        || (isActive() && resource.data.createdBy == uid() && resource.data.status in ['proposed', 'declined']);
     }
 
-    // ---------- participation: requests, assignments, attendance, hours ----------
-    // Document id is "<activityId>_<uid>" so each member has at most one record per activity.
+    // ---------------------------------------------------------------- volunteering & attendance
+    // Document id is "<activityId>_<uid>".
     function activity(aid) { return get(/databases/$(database)/documents/activities/$(aid)).data; }
     function hoursOk(h) { return h is number && h >= 0.5 && h <= 24; }
 
@@ -122,41 +189,50 @@ service cloud.firestore {
         && (d.attendance == null || d.attendance in ['present', 'absent'])
         && d.hoursStatus in ['none', 'pending', 'verified', 'rejected']
         && d.credits is number && d.credits >= 0
-        // Hours and credits are only confirmed once attendance has been verified.
         && (d.hoursStatus != 'verified' || (d.attendance == 'present' && d.status == 'approved' && hoursOk(d.verifiedHours)))
         && (d.hoursStatus == 'verified' || (d.credits == 0 && d.verifiedHours == null));
     }
 
-    match /participations/{pid} {
-      allow read: if isCore() || (isActive() && resource.data.uid == request.auth.uid);
+    function presentVolunteer(aid) {
+      return isActive()
+        && exists(/databases/$(database)/documents/participations/$(aid + '_' + uid()))
+        && get(/databases/$(database)/documents/participations/$(aid + '_' + uid())).data.attendance == 'present';
+    }
 
-      // Member requests to join an open, upcoming activity.
+    match /participations/{pid} {
+      allow read: if isCore()
+        || (isActive() && resource.data.uid == uid())
+        || canManage(activity(resource.data.activityId))
+        || presentVolunteer(resource.data.activityId);
+
+      // Volunteer: one click adds you to the volunteer list.
       allow create: if isActive()
-        && pid == request.resource.data.activityId + '_' + request.auth.uid
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.status == 'requested'
-        && request.resource.data.source == 'request'
+        && pid == request.resource.data.activityId + '_' + uid()
+        && request.resource.data.uid == uid()
+        && request.resource.data.status == 'approved'
+        && request.resource.data.source == 'volunteer'
         && request.resource.data.attendance == null
         && request.resource.data.hoursStatus == 'none'
         && request.resource.data.credits == 0
         && request.resource.data.verifiedHours == null
-        && request.resource.data.reviewedBy == null
         && activity(request.resource.data.activityId).status == 'upcoming'
-        && activity(request.resource.data.activityId).openForRequests == true;
+        && activity(request.resource.data.activityId).openForRequests == true
+        && activity(request.resource.data.activityId).type in ['drive', 'fundraiser', 'event'];
 
-      // Core / Admin can assign any member directly.
-      allow create: if isCore()
-        && pid == request.resource.data.activityId + '_' + request.resource.data.uid
-        && exists(/databases/$(database)/documents/activities/$(request.resource.data.activityId))
+      // Organisers can add volunteers directly.
+      allow create: if pid == request.resource.data.activityId + '_' + request.resource.data.uid
+        && canManage(activity(request.resource.data.activityId))
         && validParticipation(request.resource.data);
 
       allow update: if validParticipation(request.resource.data)
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.activityId == resource.data.activityId
         && (
-          isCore()
-          // Member logs their own hours after attendance was marked present.
-          || (isActive() && resource.data.uid == request.auth.uid
+          (canManage(activity(resource.data.activityId))
+            // Nobody verifies their own hours except Leadership.
+            && !(request.resource.data.hoursStatus == 'verified' && resource.data.hoursStatus != 'verified'
+                 && resource.data.uid == uid() && !isLeadership()))
+          || (isActive() && resource.data.uid == uid()
               && resource.data.attendance == 'present'
               && resource.data.status == 'approved'
               && resource.data.hoursStatus in ['none', 'pending', 'rejected']
@@ -166,36 +242,82 @@ service cloud.firestore {
               && changed().hasOnly(['hoursLogged', 'hoursNote', 'hoursStatus', 'hoursSubmittedAt', 'updatedAt']))
         );
 
-      // Members can withdraw a request that has not been approved; Core can remove records.
-      allow delete: if isCore()
-        || (isActive() && resource.data.uid == request.auth.uid
-            && resource.data.status in ['requested', 'deferred']);
+      allow delete: if canManage(activity(resource.data.activityId))
+        || (isActive() && resource.data.uid == uid() && resource.data.attendance == null && resource.data.hoursStatus == 'none');
     }
 
-    // ---------- EDPI: drive plans, results and scores (Core / Admin only) ----------
+    // ---------------------------------------------------------------- EDPI
     match /edpi/{activityId} {
-      function startAt() { return activity(activityId).startAt; }
+      function a() { return activity(activityId); }
       function samePlan() { return request.resource.data.plan == resource.data.plan; }
 
-      allow read: if isCore();
-      allow create: if isCore()
-        && exists(/databases/$(database)/documents/activities/$(activityId))
-        && request.resource.data.locked == false
-        && request.time < startAt();
-      allow update: if isCore() && (
-        // Draft: the plan may change only before it is locked and before the drive starts.
-        // No results can be recorded against an unlocked plan.
-        (resource.data.locked == false && request.resource.data.locked == false
-          && request.time < startAt()
-          && request.resource.data.get('results', null) == null)
-        // Locking, and recording results afterwards: the plan can never change again
-        // and a locked plan can never be unlocked.
-        || (request.resource.data.locked == true && samePlan())
-      );
-      allow delete: if isAdmin();
+      allow read: if isCore() || canManage(a()) || presentVolunteer(activityId);
+      allow create: if canManage(a()) && request.resource.data.locked == false && request.time < a().startAt;
+      allow update: if (
+          // Draft plan: organisers only, before the drive starts, no results yet.
+          (canManage(a()) && resource.data.locked == false && request.resource.data.locked == false
+            && request.time < a().startAt && request.resource.data.get('results', null) == null)
+          // Lock, and record results against a locked plan. Results can be entered by organisers,
+          // and — once the drive is completed — by the volunteers who attended it.
+          || (request.resource.data.locked == true && samePlan()
+              && (canManage(a()) || (resource.data.locked == true && presentVolunteer(activityId) && a().status == 'completed')))
+        );
+      allow delete: if isLeadership();
     }
 
-    // Anything else is closed.
+    // ---------------------------------------------------------------- tasks
+    function validTask(d) {
+      return str(d.title, 200) && d.title.size() > 0
+        && optStr(d.get('description', null), 4000)
+        && d.assigneeUid is string
+        && d.status in ['todo', 'in_progress', 'done']
+        && (d.departmentId == null || d.departmentId is string)
+        && (d.dueAt == null || d.dueAt is timestamp)
+        && optStr(d.get('progressNote', null), 1000);
+    }
+    function canAssign(d) {
+      return isLeadership()
+        || (isHod() && d.departmentId == myDept() && get(userPath(d.assigneeUid)).data.get('departmentId', null) == myDept());
+    }
+
+    match /tasks/{id} {
+      allow read: if isActive() && (resource.data.assigneeUid == uid() || resource.data.createdBy == uid()
+        || isLeadership() || (isHod() && resource.data.departmentId == myDept()));
+      allow create: if isActive() && validTask(request.resource.data)
+        && request.resource.data.createdBy == uid() && canAssign(request.resource.data);
+      allow update: if validTask(request.resource.data) && request.resource.data.createdBy == resource.data.createdBy && (
+        ((resource.data.createdBy == uid() || isLeadership() || (isHod() && resource.data.departmentId == myDept()))
+          && canAssign(request.resource.data))
+        || (isActive() && resource.data.assigneeUid == uid()
+            && changed().hasOnly(['status', 'progressNote', 'updatedAt', 'completedAt']))
+      );
+      allow delete: if isLeadership() || (isActive() && resource.data.createdBy == uid());
+    }
+
+    // ---------------------------------------------------------------- notifications
+    match /notifications/{id} {
+      allow read, delete: if signedIn() && resource.data.uid == uid();
+      allow create: if isActive() && request.resource.data.createdBy == uid()
+        && request.resource.data.uid is string
+        && str(request.resource.data.title, 200)
+        && optStr(request.resource.data.get('body', null), 500)
+        && optStr(request.resource.data.get('link', null), 300)
+        && request.resource.data.read == false;
+      allow update: if signedIn() && resource.data.uid == uid() && changed().hasOnly(['read', 'readAt']);
+    }
+
+    // ---------------------------------------------------------------- HR feedback
+    match /feedback/{id} {
+      allow read: if isActive() && (resource.data.authorUid == uid() || isLeadership() || inHr());
+      allow create: if isActive() && request.resource.data.authorUid == uid()
+        && request.resource.data.rating is int && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
+        && str(request.resource.data.message, 3000)
+        && request.resource.data.status == 'new';
+      allow update: if (isLeadership() || inHr())
+        && changed().hasOnly(['status', 'hrNote', 'reviewedBy', 'reviewedAt']);
+      allow delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

@@ -7,11 +7,15 @@ import { fmtDate, fmtHours } from '../lib/format';
 import { Avatar, Empty } from '../components/ui';
 import { IconChevronLeft } from '../components/icons';
 import { ContributionTable } from './Contributions';
-import { EditMemberModal, RoleBadge } from './Members';
+import { PersonModal } from './Members';
+import { RoleBadge, displayTitle } from '../components/people';
+import { normRole } from '../lib/access';
+import { IconMail } from '../components/icons';
 
 export function MemberProfilePage() {
   const { id } = useParams();
-  const { profile: me, isCore, isAdmin } = useMe();
+  const { profile: me, can } = useMe();
+  const isCore = can.isCore;
   const { userById, positionById, departmentById, participations, activityById } = useData();
   const [editing, setEditing] = useState(false);
   const [contact, setContact] = useState<{ phone?: string; emergencyContact?: string } | null>(null);
@@ -25,26 +29,27 @@ export function MemberProfilePage() {
   if (!u) return <Empty title="Member not found"><Link to="/members">Back to members</Link></Empty>;
 
   const pos = u.positionId ? positionById.get(u.positionId) : undefined;
-  const dept = pos?.departmentId ? departmentById.get(pos.departmentId) : undefined;
+  const dept = u.departmentId ? departmentById.get(u.departmentId) : undefined;
   const parts = participations.filter((p) => p.uid === u.id);
   const s = summarise(parts, activityById);
 
   return (
     <>
-      <Link to="/members" className="backlink"><IconChevronLeft width={16} />{isCore ? 'Members' : 'Directory'}</Link>
+      <Link to="/members" className="backlink"><IconChevronLeft width={16} />{can.isPeopleAdmin ? 'People' : 'Directory'}</Link>
       <section className="card card-pad" style={{ marginBottom: 20 }}>
         <div className="row" style={{ gap: 16, alignItems: 'center' }}>
           <Avatar name={u.name} size="lg" />
           <div style={{ flex: 1, minWidth: 200 }}>
             <h1>{u.name}</h1>
             <div className="row" style={{ marginTop: 6 }}>
-              <span className="chip">{pos?.title ?? 'No position assigned'}</span>
-              {dept && <span className="chip">{dept.name}</span>}
+              <span className="chip">{displayTitle(u, positionById)}</span>
+              {dept && <Link to={`/departments/${dept.id}`} className="chip" style={{ textDecoration: 'none' }}>{dept.name}</Link>}
               <RoleBadge role={u.role} />
               {u.status === 'removed' && <span className="badge bad">Access removed</span>}
             </div>
           </div>
-          {isAdmin && u.role !== 'admin' && <button className="btn" onClick={() => setEditing(true)}>Edit member</button>}
+          <a className="btn" href={`mailto:${u.email}`}><IconMail />Email</a>
+          {can.isPeopleAdmin && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman') && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
           {u.id === me.id && <Link className="btn" to="/profile">Edit my profile</Link>}
         </div>
         {u.bio && <p className="prose" style={{ marginTop: 14 }}>{u.bio}</p>}
@@ -88,7 +93,7 @@ export function MemberProfilePage() {
           </section>
         </div>
       </div>
-      {editing && <EditMemberModal u={u} onClose={() => setEditing(false)} />}
+      {editing && <PersonModal u={u} onClose={() => setEditing(false)} />}
     </>
   );
 }

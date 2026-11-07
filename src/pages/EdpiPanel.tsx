@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useData } from '../context/DataContext';
 import * as api from '../lib/api';
 import type { Activity, EdpiRecord, Participation } from '../lib/types';
 import { computeEdpi, EDPI_SETTINGS, validatePlan } from '../lib/edpi';
@@ -10,10 +9,11 @@ import { BreakdownTable, parseHoursList, ScoreSummary } from '../components/edpi
 import { IconLock } from '../components/icons';
 
 /** EDPI for one drive: plan → lock → results → score (EDPI framework, Section 2). */
-export function EdpiPanel({ a, parts }: { a: Activity; parts: Participation[] }) {
-  const { edpi } = useData();
-  const record = edpi.find((r) => r.id === a.id);
+export function EdpiPanel({ a, parts, record, canManage }: { a: Activity; parts: Participation[]; record?: EdpiRecord; canManage: boolean }) {
   const started = a.startAt.getTime() <= Date.now();
+  if (!canManage && !record?.locked)
+    return <div className="callout info">The organiser hasn't locked an EDPI plan for this drive yet, so results can't be entered.</div>;
+  const volunteerCanEnter = !canManage && a.status === 'completed';
 
   return (
     <div className="stack">
@@ -23,7 +23,14 @@ export function EdpiPanel({ a, parts }: { a: Activity; parts: Participation[] })
       ) : (
         <>
           <LockedPlan record={record} />
-          <ResultsForm a={a} record={record} parts={parts} />
+          {canManage || volunteerCanEnter ? (
+            <ResultsForm a={a} record={record} parts={parts} />
+          ) : (
+            <>
+              <div className="callout info">You attended this drive, so you can help enter its results once the organiser marks it <b>completed</b>.</div>
+              {record.score && <section className="card card-pad"><ScoreSummary s={record.score} flags={record.flags ?? []} /></section>}
+            </>
+          )}
         </>
       )}
     </div>

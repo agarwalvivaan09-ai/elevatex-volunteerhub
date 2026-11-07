@@ -2,7 +2,7 @@ import { LOGO } from '../lib/paths';
 import { useEffect, useState } from 'react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { adminExists, bootstrapAdmin } from '../lib/api';
+import { adminExists, bootstrapChairman } from '../lib/api';
 import { Field, Loading, friendlyError } from '../components/ui';
 import { useAuthState } from '../context/AuthContext';
 
@@ -41,7 +41,7 @@ export function SetupPage() {
         <div>
           <h1>Set up ElevateX Hub</h1>
           <p className="muted" style={{ marginTop: 6 }}>
-            No admin exists yet. The first account to complete this step becomes the <b>Admin</b> with full control.
+            No Chairman exists yet. The first account to complete this step becomes the <b>Chairman</b> with full control.
             This can only happen once.
           </p>
         </div>
@@ -49,19 +49,19 @@ export function SetupPage() {
         <Field label="Your full name">
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </Field>
-        <Field label="Admin email"><input className="input" value={user?.email ?? ''} disabled /></Field>
+        <Field label="Email"><input className="input" value={user?.email ?? ''} disabled /></Field>
         <button
           className="btn btn-primary"
           disabled={busy || !name.trim()}
           onClick={async () => {
             setBusy(true);
             setError('');
-            try { await bootstrapAdmin(name); } catch (e) { setError(friendlyError(e)); setBusy(false); }
+            try { await bootstrapChairman(name); } catch (e) { setError(friendlyError(e)); setBusy(false); }
           }}
         >
-          {busy ? 'Setting up…' : 'Become Admin and set up'}
+          {busy ? 'Setting up…' : 'Become Chairman and set up'}
         </button>
-        <p className="muted small">This also creates starter departments and positions (President / CEO, Finance, Operations, Project Head…) that you can edit later.</p>
+        <p className="muted small">This also creates the five departments (Finance, Marketing, HR, Project Operations, Drive Execution) and all ElevateX positions.</p>
       </Shell>
     );
 
@@ -70,7 +70,7 @@ export function SetupPage() {
       <h1>Account not registered</h1>
       <p className="muted">
         You're signed in as <b>{user?.email}</b>, but this account hasn't been added to ElevateX Hub.
-        Ask the Admin to add you using this exact email address, then sign in again.
+        Ask the Chairman or Vice Chairman to add you using this exact email address, then sign in again.
       </p>
       <button className="btn" onClick={() => signOut(auth)}>Sign out</button>
     </Shell>
@@ -81,7 +81,7 @@ export function RemovedPage() {
   return (
     <Shell>
       <h1>Access removed</h1>
-      <p className="muted">Your ElevateX Hub access has been turned off. If you think this is a mistake, contact the Admin.</p>
+      <p className="muted">Your ElevateX Hub access has been turned off. If you think this is a mistake, contact the Chairman or Vice Chairman.</p>
       <button className="btn" onClick={() => signOut(auth)}>Sign out</button>
     </Shell>
   );
@@ -93,7 +93,7 @@ export function NotConfiguredPage() {
       <h1>Firebase is not connected</h1>
       <p className="muted">
         Copy <code>.env.example</code> to <code>.env.local</code> and fill in your Firebase web-app settings,
-        then restart the dev server. See <b>README.md → Setup</b> for step-by-step instructions.
+        then restart the dev server. See <b>README.md → Setup</b>.
       </p>
     </Shell>
   );

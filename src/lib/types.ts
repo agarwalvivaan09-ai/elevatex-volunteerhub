@@ -1,6 +1,10 @@
 import type { EdpiBreakdown } from './edpi';
 
-export type Role = 'admin' | 'core' | 'member';
+/**
+ * Access tier. Derived from a member's position (see positions collection).
+ * Legacy v1 values ('admin', 'core') are still accepted and mapped in access.ts.
+ */
+export type Role = 'chairman' | 'vice_chairman' | 'executive' | 'board' | 'hod' | 'member' | 'admin' | 'core';
 export type UserStatus = 'active' | 'removed';
 
 export interface UserProfile {
@@ -10,14 +14,12 @@ export interface UserProfile {
   role: Role;
   status: UserStatus;
   positionId: string | null;
+  departmentId?: string | null;
+  /** Optional display title, e.g. "Founder, Former CEO & Chairman" or "Former Head of Drives". */
+  title?: string | null;
   bio?: string | null;
-  responsibilities?: string | null; // individual responsibilities set by Admin
+  responsibilities?: string | null;
   joinedAt?: Date | null;
-}
-
-export interface PrivateContact {
-  phone?: string;
-  emergencyContact?: string;
 }
 
 export interface Department {
@@ -30,6 +32,9 @@ export interface Department {
 export interface Position {
   id: string;
   title: string;
+  /** The access tier anyone holding this position gets. */
+  role: Exclude<Role, 'admin' | 'core'>;
+  /** Heads of Department: their department. Others: null. */
   departmentId: string | null;
   description?: string;
   responsibilities: string[];
@@ -37,7 +42,9 @@ export interface Position {
 }
 
 export type ActivityType = 'drive' | 'fundraiser' | 'event' | 'meeting';
-export type ActivityStatus = 'upcoming' | 'completed' | 'cancelled';
+export type ActivityStatus = 'proposed' | 'upcoming' | 'completed' | 'cancelled' | 'declined';
+export type Audience = 'all' | 'core' | 'hod' | 'board' | 'department' | 'volunteers';
+export type Mode = 'in_person' | 'online';
 
 export interface ActivityLink {
   label: string;
@@ -52,7 +59,15 @@ export interface Activity {
   description: string;
   startAt: Date;
   endAt: Date | null;
+  mode: Mode;
   venue: string;
+  /** Google Maps link for in-person activities. */
+  mapUrl: string | null;
+  /** Google Meet / Zoom link for online activities. */
+  meetingUrl: string | null;
+  audience: Audience;
+  /** For "volunteers" meetings: the drive/fundraiser whose volunteers are invited. */
+  relatedActivityId: string | null;
   instructions: string;
   requirements: string;
   links: ActivityLink[];
@@ -63,6 +78,8 @@ export interface Activity {
   openForRequests: boolean;
   createdBy: string;
   createdAt?: Date | null;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
 }
 
 export type ParticipationStatus = 'requested' | 'approved' | 'deferred' | 'rejected';
@@ -73,9 +90,9 @@ export interface Participation {
   activityId: string;
   uid: string;
   status: ParticipationStatus;
-  source: 'request' | 'assigned';
-  note: string | null; // member's message with the request
-  assignment: string | null; // role on the day, e.g. "Registration desk"
+  source: 'request' | 'assigned' | 'volunteer';
+  note: string | null;
+  assignment: string | null;
   reviewNote: string | null;
   reviewedBy: string | null;
   reviewedAt: Date | null;
@@ -109,20 +126,62 @@ export interface EdpiRecord {
     spent: number;
     peopleHelped: number;
     impactDone: number;
-    /** Hours for volunteers who are not registered on the hub (from the sign-in sheet). */
     extraHours: number[];
-    /** Snapshot of every HoursEach entry used for the score. */
     hoursEach: number[];
   } | null;
   score: EdpiBreakdown | null;
   flags: string[];
   scoredAt?: Date | null;
+  updatedBy?: string | null;
+}
+
+export type TaskStatus = 'todo' | 'in_progress' | 'done';
+export interface Task {
+  id: string;
+  title: string;
+  description: string | null;
+  assigneeUid: string;
+  departmentId: string | null;
+  dueAt: Date | null;
+  status: TaskStatus;
+  progressNote: string | null;
+  createdBy: string;
+  createdAt?: Date | null;
+  completedAt?: Date | null;
+}
+
+export interface AppNotification {
+  id: string;
+  uid: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  kind: string;
+  read: boolean;
+  createdBy: string;
+  createdAt?: Date | null;
+}
+
+export interface Feedback {
+  id: string;
+  authorUid: string;
+  rating: number;
+  category: string;
+  message: string;
+  status: 'new' | 'reviewed';
+  hrNote: string | null;
+  createdAt?: Date | null;
 }
 
 export const ROLE_LABEL: Record<Role, string> = {
-  admin: 'Admin',
-  core: 'Core Team',
+  chairman: 'Chairman',
+  vice_chairman: 'Vice Chairman',
+  executive: 'Executive',
+  board: 'Board of Advisors',
+  hod: 'Head of Department',
   member: 'Member',
+  admin: 'Chairman',
+  core: 'Member',
 };
 
 export const TYPE_LABEL: Record<ActivityType, string> = {
@@ -132,9 +191,20 @@ export const TYPE_LABEL: Record<ActivityType, string> = {
   meeting: 'Meeting',
 };
 
+export const AUDIENCE_LABEL: Record<Audience, string> = {
+  all: 'All-member meeting',
+  core: 'Core team meeting (Board + Heads)',
+  hod: 'Heads of Department meeting',
+  board: 'Board meeting',
+  department: 'Department meeting',
+  volunteers: 'Volunteers meeting',
+};
+
 export const PARTICIPATION_LABEL: Record<ParticipationStatus, string> = {
   requested: 'Pending review',
-  approved: 'Approved',
+  approved: 'Volunteering',
   deferred: 'Deferred',
-  rejected: 'Not selected',
+  rejected: 'Removed',
 };
+
+export const TASK_LABEL: Record<TaskStatus, string> = { todo: 'To do', in_progress: 'In progress', done: 'Done' };

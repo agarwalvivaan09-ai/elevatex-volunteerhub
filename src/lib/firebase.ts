@@ -14,7 +14,8 @@ export const useEmulators = env.VITE_USE_EMULATORS === 'true';
 const config = {
   apiKey: env.VITE_FIREBASE_API_KEY || (useEmulators ? 'demo-key' : undefined),
   authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: env.VITE_FIREBASE_PROJECT_ID || (useEmulators ? 'demo-elevatex' : undefined),
+  // Emulator mode always uses the local demo project, never the real one.
+  projectId: useEmulators ? 'demo-elevatex' : env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: env.VITE_FIREBASE_APP_ID,
