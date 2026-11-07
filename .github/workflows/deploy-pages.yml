@@ -1,5 +1,5 @@
 # Builds the Hub and publishes it to GitHub Pages on every push to main.
-# Site: https://agarwalvivaan09-ai.github.io/elevatex-volunteerhub/
+# Site: https://hub.elevate-x.in (custom domain, set in Settings → Pages)
 name: Deploy to GitHub Pages
 
 on:
@@ -29,7 +29,8 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          VITE_BASE: /${{ github.event.repository.name }}/
+          # Served at the root of the custom domain.
+          VITE_BASE: /
       # Pages has no rewrites: serve the app for any deep link (e.g. /activities/123).
       - run: cp dist/index.html dist/404.html
       - uses: actions/upload-pages-artifact@v3

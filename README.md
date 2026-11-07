@@ -140,7 +140,7 @@ The Hub works like an app. Open it in Chrome or Safari and choose **Add to Home 
 ### Linking from elevate-x.in
 The Hub links back to elevate-x.in from the sidebar, the More menu and the sign-in page. To add a button on the public site, paste this into its navbar:
 ```html
-<a href="https://agarwalvivaan09-ai.github.io/elevatex-volunteerhub/" class="link-btn strong">Volunteer login</a>
+<a href="https://hub.elevate-x.in" class="link-btn strong">Volunteer login</a>
 ```
 
 ### Notes
