@@ -1,0 +1,203 @@
+rules_version = '2';
+
+// ElevateX Hub — Firestore security rules.
+// These rules are the real permission system. The UI hides buttons, but these rules
+// are what stop a Member from approving their own request or a Core member from
+// changing someone's access level, even if they bypass the UI.
+//
+// Roles:   admin  — full control (one account, the owner)
+//          core   — manages activities, requests, attendance, hours, EDPI
+//          member — own dashboard, request to join, log own hours
+//
+// A user whose profile status is "removed" can only read their own profile.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function me() { return get(userPath(request.auth.uid)).data; }
+    function isActive() { return signedIn() && exists(userPath(request.auth.uid)) && me().status == 'active'; }
+    function isAdmin() { return isActive() && me().role == 'admin'; }
+    function isCore() { return isActive() && me().role in ['core', 'admin']; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function str(v, max) { return v is string && v.size() <= max; }
+    function optStr(v, max) { return v == null || str(v, max); }
+
+    // ---------- bootstrap: the very first admin ----------
+    // meta/bootstrap can be created exactly once, in the same batch as the
+    // creator's own admin profile. After that, admin can only be granted from the
+    // Firebase console.
+    match /meta/bootstrap {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.adminUid == request.auth.uid
+        && existsAfter(userPath(request.auth.uid))
+        && getAfter(userPath(request.auth.uid)).data.role == 'admin';
+      allow update, delete: if false;
+    }
+
+    // ---------- users ----------
+    function validProfile(d) {
+      return str(d.name, 120) && d.name.size() > 0
+        && str(d.email, 200)
+        && d.role in ['admin', 'core', 'member']
+        && d.status in ['active', 'removed']
+        && (d.positionId == null || d.positionId is string)
+        && optStr(d.get('bio', null), 1000)
+        && optStr(d.get('responsibilities', null), 2000);
+    }
+
+    match /users/{uid} {
+      allow read: if isActive() || (signedIn() && request.auth.uid == uid);
+
+      // Admin adds members (never as admin). Or: one-time bootstrap of the owner account.
+      allow create: if validProfile(request.resource.data) && (
+        (isAdmin() && request.resource.data.role in ['core', 'member'])
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.role == 'admin'
+            && request.resource.data.status == 'active'
+            && !exists(/databases/$(database)/documents/meta/bootstrap)
+            && getAfter(/databases/$(database)/documents/meta/bootstrap).data.adminUid == uid)
+      );
+
+      allow update: if validProfile(request.resource.data) && request.resource.data.email == resource.data.email && (
+        // Members (and everyone) may edit only their own personal fields.
+        (isActive() && request.auth.uid == uid
+          && changed().hasOnly(['name', 'bio', 'updatedAt']))
+        // Admin manages everyone, but the admin account's role/status can never be
+        // changed from the app, and nobody can be made admin from the app.
+        || (isAdmin()
+          && request.resource.data.role in ['core', 'member', resource.data.role]
+          && (resource.data.role != 'admin'
+              || (request.resource.data.role == 'admin' && request.resource.data.status == 'active')))
+      );
+
+      allow delete: if isAdmin() && resource.data.role != 'admin';
+
+      // Private contact details: owner, Core and Admin can read; owner and Admin can write.
+      match /private/{docId} {
+        allow read: if (isActive() && request.auth.uid == uid) || isCore();
+        allow write: if (isActive() && request.auth.uid == uid) || isAdmin();
+      }
+    }
+
+    // ---------- organisation structure ----------
+    match /departments/{id} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+    match /positions/{id} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+
+    // ---------- activities: drives, fundraisers, events, meetings ----------
+    function validActivity(d) {
+      return str(d.title, 160) && d.title.size() > 0
+        && d.type in ['drive', 'fundraiser', 'event', 'meeting']
+        && d.status in ['upcoming', 'completed', 'cancelled']
+        && d.startAt is timestamp
+        && d.credits is number && d.credits >= 0 && d.credits <= 10
+        && d.openForRequests is bool;
+    }
+
+    match /activities/{id} {
+      allow read: if isActive();
+      allow create: if isCore() && validActivity(request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isCore() && validActivity(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- participation: requests, assignments, attendance, hours ----------
+    // Document id is "<activityId>_<uid>" so each member has at most one record per activity.
+    function activity(aid) { return get(/databases/$(database)/documents/activities/$(aid)).data; }
+    function hoursOk(h) { return h is number && h >= 0.5 && h <= 24; }
+
+    function validParticipation(d) {
+      return d.status in ['requested', 'approved', 'deferred', 'rejected']
+        && (d.attendance == null || d.attendance in ['present', 'absent'])
+        && d.hoursStatus in ['none', 'pending', 'verified', 'rejected']
+        && d.credits is number && d.credits >= 0
+        // Hours and credits are only confirmed once attendance has been verified.
+        && (d.hoursStatus != 'verified' || (d.attendance == 'present' && d.status == 'approved' && hoursOk(d.verifiedHours)))
+        && (d.hoursStatus == 'verified' || (d.credits == 0 && d.verifiedHours == null));
+    }
+
+    match /participations/{pid} {
+      allow read: if isCore() || (isActive() && resource.data.uid == request.auth.uid);
+
+      // Member requests to join an open, upcoming activity.
+      allow create: if isActive()
+        && pid == request.resource.data.activityId + '_' + request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'requested'
+        && request.resource.data.source == 'request'
+        && request.resource.data.attendance == null
+        && request.resource.data.hoursStatus == 'none'
+        && request.resource.data.credits == 0
+        && request.resource.data.verifiedHours == null
+        && request.resource.data.reviewedBy == null
+        && activity(request.resource.data.activityId).status == 'upcoming'
+        && activity(request.resource.data.activityId).openForRequests == true;
+
+      // Core / Admin can assign any member directly.
+      allow create: if isCore()
+        && pid == request.resource.data.activityId + '_' + request.resource.data.uid
+        && exists(/databases/$(database)/documents/activities/$(request.resource.data.activityId))
+        && validParticipation(request.resource.data);
+
+      allow update: if validParticipation(request.resource.data)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.activityId == resource.data.activityId
+        && (
+          isCore()
+          // Member logs their own hours after attendance was marked present.
+          || (isActive() && resource.data.uid == request.auth.uid
+              && resource.data.attendance == 'present'
+              && resource.data.status == 'approved'
+              && resource.data.hoursStatus in ['none', 'pending', 'rejected']
+              && request.resource.data.hoursStatus == 'pending'
+              && hoursOk(request.resource.data.hoursLogged)
+              && optStr(request.resource.data.get('hoursNote', null), 500)
+              && changed().hasOnly(['hoursLogged', 'hoursNote', 'hoursStatus', 'hoursSubmittedAt', 'updatedAt']))
+        );
+
+      // Members can withdraw a request that has not been approved; Core can remove records.
+      allow delete: if isCore()
+        || (isActive() && resource.data.uid == request.auth.uid
+            && resource.data.status in ['requested', 'deferred']);
+    }
+
+    // ---------- EDPI: drive plans, results and scores (Core / Admin only) ----------
+    match /edpi/{activityId} {
+      function startAt() { return activity(activityId).startAt; }
+      function samePlan() { return request.resource.data.plan == resource.data.plan; }
+
+      allow read: if isCore();
+      allow create: if isCore()
+        && exists(/databases/$(database)/documents/activities/$(activityId))
+        && request.resource.data.locked == false
+        && request.time < startAt();
+      allow update: if isCore() && (
+        // Draft: the plan may change only before it is locked and before the drive starts.
+        // No results can be recorded against an unlocked plan.
+        (resource.data.locked == false && request.resource.data.locked == false
+          && request.time < startAt()
+          && request.resource.data.get('results', null) == null)
+        // Locking, and recording results afterwards: the plan can never change again
+        // and a locked plan can never be unlocked.
+        || (request.resource.data.locked == true && samePlan())
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Anything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
