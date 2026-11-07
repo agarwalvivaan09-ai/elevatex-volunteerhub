@@ -1,17 +1,26 @@
 import { Link } from 'react-router-dom';
 import { useMe } from '../context/AuthContext';
 import { summarise, useData } from '../context/DataContext';
-import { canSeeActivity } from '../lib/access';
+import { canSeeActivity, normRole } from '../lib/access';
 import { fmtHours, fmtShort, relativeDay } from '../lib/format';
 import { TASK_LABEL } from '../lib/types';
 import { ActivityRow, WhereCard } from '../components/activity';
-import { displayTitle } from '../components/people';
+import { PersonCard, displayTitle } from '../components/people';
 import { Avatar, Empty, HoursBadge, RequestBadge } from '../components/ui';
 import { IconCalendar, IconInbox, IconPlus, IconTask, IconVideo } from '../components/icons';
 
 export function DashboardPage() {
   const { profile, can } = useMe();
-  const { activities, participations, positionById, departmentById, activityById, tasks, notifications } = useData();
+  const { activities, participations, positionById, departmentById, activityById, tasks, notifications, users } = useData();
+  // Point of contact: your department head(s); otherwise HR head; otherwise the Chairman / Vice Chairman.
+  const others = users.filter((u) => u.status === 'active' && u.id !== profile.id);
+  const contacts = (() => {
+    const heads = others.filter((u) => normRole(u.role) === 'hod' && !!profile.departmentId && u.departmentId === profile.departmentId);
+    if (heads.length) return { label: 'Your department head', people: heads };
+    const hr = others.filter((u) => normRole(u.role) === 'hod' && u.departmentId === 'hr');
+    if (hr.length) return { label: 'Head of HR', people: hr };
+    return { label: 'Leadership', people: others.filter((u) => ['chairman', 'vice_chairman'].includes(normRole(u.role))) };
+  })();
 
   const mine = participations.filter((p) => p.uid === profile.id);
   const myByActivity = new Map(mine.map((p) => [p.activityId, p]));
@@ -118,6 +127,12 @@ export function DashboardPage() {
         </div>
 
         <div className="stack">
+          {!can.isTop && contacts.people.length > 0 && (
+            <section className="stack-sm">
+              <div className="spread"><div className="tier">Point of contact · {contacts.label}</div><Link to="/members" className="small">All contacts</Link></div>
+              {contacts.people.map((u) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} />)}
+            </section>
+          )}
           <section className="card">
             <div className="card-head"><h2>My tasks</h2><Link to="/tasks" className="btn btn-sm">Open</Link></div>
             {myTasks.length === 0 ? <Empty title="No open tasks" icon={<IconTask />} /> : (

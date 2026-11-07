@@ -1,5 +1,5 @@
 import { LOGO } from '../lib/paths';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -7,17 +7,19 @@ import { useMe } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { migrateToV2 } from '../lib/api';
 import { displayTitle } from './people';
+import { SITE_URL, useNav } from './nav';
 import { Avatar, Loading } from './ui';
-import {
-  IconBell, IconCalc, IconCalendar, IconChart, IconChat, IconClock, IconHome, IconInbox, IconLogout, IconMenu, IconOrg, IconTask, IconUser, IconUsers, IconVideo, IconBuilding,
-} from './icons';
+import { IconBell, IconLink, IconLogout, IconMenu } from './icons';
 
 export function Layout() {
   const { profile, can } = useMe();
-  const { ready, participations, positionById, departmentById, notifications, tasks, activities, feedback } = useData();
-  const [open, setOpen] = useState(false);
+  const { ready, positionById, departmentById, activityById } = useData();
+  const { sections, tabs, moreCount, unread } = useNav();
   const location = useLocation();
-  useEffect(() => setOpen(false), [location.pathname]);
+  const main = useRef<HTMLElement>(null);
+
+  // Scroll to top on every page change (important on phones).
+  useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
 
   // One-time upgrade of a v1 install: the original Admin becomes Chairman and the ElevateX structure is installed.
   const migrated = useRef(false);
@@ -29,41 +31,29 @@ export function Layout() {
     }
   }, [ready, can.isPeopleAdmin, profile, departmentById]);
 
-  const unread = notifications.filter((n) => !n.read).length;
-  const openTasks = tasks.filter((t) => t.assigneeUid === profile.id && t.status !== 'done').length;
-  const proposals = can.isCore ? activities.filter((a) => a.status === 'proposed' && a.createdBy !== profile.id).length : 0;
-  const pendingHours = can.isCore ? participations.filter((p) => p.hoursStatus === 'pending' && (activities.find((a) => a.id === p.activityId) ? can.canManageActivity(activities.find((a) => a.id === p.activityId)!) : false)).length : 0;
-  const newFeedback = can.canSeeFeedback ? feedback.filter((f) => f.status === 'new').length : 0;
-  const myDept = profile.departmentId ? departmentById.get(profile.departmentId) : undefined;
+  // Which phone tab is "current": a meeting's page belongs to Meetings, not Drives.
+  const path = location.pathname;
+  const viewedActivity = path.startsWith('/activities/') ? activityById.get(path.split('/')[2] ?? '') : undefined;
+  const isMeetingPage = path.startsWith('/meetings') || viewedActivity?.type === 'meeting' || (path === '/activities/new' && location.search.includes('type=meeting'));
+  const activeTab = path === '/' ? '/' : isMeetingPage ? '/meetings' : path.startsWith('/activities') ? '/activities' : path.startsWith('/tasks') ? '/tasks' : '/more';
 
   return (
-    <div className={`shell ${open ? 'nav-open' : ''}`}>
+    <div className="shell">
       <aside className="sidebar" aria-label="Main navigation">
         <NavLink to="/" className="brand">
           <img src={LOGO} alt="" />
           <div><b>ElevateX</b><span>Volunteer Hub</span></div>
         </NavLink>
         <nav className="nav">
-          <NavLink to="/" end><IconHome />Dashboard</NavLink>
-          <NavLink to="/notifications"><IconBell />Notifications{unread > 0 && <span className="count">{unread}</span>}</NavLink>
-          <NavLink to="/activities"><IconCalendar />Drives & fundraisers</NavLink>
-          <NavLink to="/meetings"><IconVideo />Meetings</NavLink>
-          <NavLink to="/tasks"><IconTask />Tasks{openTasks > 0 && <span className="count">{openTasks}</span>}</NavLink>
-          <NavLink to="/contributions"><IconClock />My contributions</NavLink>
-          {myDept && <NavLink to={`/departments/${myDept.id}`}><IconBuilding />{myDept.name}</NavLink>}
-          <NavLink to="/feedback"><IconChat />{can.canSeeFeedback ? 'Member feedback' : 'Feedback to HR'}{newFeedback > 0 && <span className="count">{newFeedback}</span>}</NavLink>
-          {can.isCore && (
-            <>
-              <div className="nav-label">Manage</div>
-              <NavLink to="/review"><IconInbox />Approvals{proposals + pendingHours > 0 && <span className="count">{proposals + pendingHours}</span>}</NavLink>
-              <NavLink to="/analytics"><IconChart />Analytics</NavLink>
-            </>
-          )}
-          <div className="nav-label">Organisation</div>
-          <NavLink to="/members"><IconUsers />{can.isPeopleAdmin ? 'People' : 'Directory'}</NavLink>
-          <NavLink to="/organisation"><IconOrg />Structure</NavLink>
-          <NavLink to="/edpi"><IconCalc />EDPI calculator</NavLink>
-          <NavLink to="/profile"><IconUser />My profile</NavLink>
+          {sections.map((s, i) => (
+            <div key={i} className="nav-group">
+              {s.label && <div className="nav-label">{s.label}</div>}
+              {s.items.map((it) => (
+                <NavLink key={it.to + it.label} to={it.to} end={it.to === '/'}>{it.icon}{it.label}{!!it.count && <span className="count">{it.count}</span>}</NavLink>
+              ))}
+            </div>
+          ))}
+          <a href={SITE_URL} target="_blank" rel="noopener noreferrer" className="site-link"><IconLink />elevate-x.in</a>
         </nav>
         <div className="sidebar-foot">
           <Avatar name={profile.name} />
@@ -74,18 +64,27 @@ export function Layout() {
           <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={() => signOut(auth)}><IconLogout /></button>
         </div>
       </aside>
-      <div className="scrim" onClick={() => setOpen(false)} />
+
       <div className="main">
         <header className="topbar">
-          <button className="icon-btn" aria-label="Open menu" onClick={() => setOpen(true)}><IconMenu /></button>
-          <img src={LOGO} alt="" />
-          <b style={{ flex: 1 }}>ElevateX Hub</b>
+          <Link to="/" className="topbar-brand"><img src={LOGO} alt="" /><b>ElevateX Hub</b></Link>
           <Link to="/notifications" className="icon-btn bell" aria-label={`Notifications (${unread} unread)`}>
             <IconBell />{unread > 0 && <span className="dot">{unread > 9 ? '9+' : unread}</span>}
           </Link>
         </header>
-        <main className="content">{ready ? <Outlet /> : <Loading />}</main>
+        <main className="content" ref={main}>{ready ? <Outlet /> : <Loading />}</main>
       </div>
+
+      <nav className="tabbar" aria-label="Quick navigation">
+        {tabs.map((t) => (
+          <NavLink key={t.to} to={t.to} className={() => (activeTab === t.to ? 'active' : '')}>
+            <span className="ti">{t.icon}{!!t.count && <span className="dot">{t.count}</span>}</span>{t.label}
+          </NavLink>
+        ))}
+        <NavLink to="/more" className={() => (activeTab === '/more' ? 'active' : '')}>
+          <span className="ti"><IconMenu />{moreCount > 0 && <span className="dot">{moreCount > 9 ? '9+' : moreCount}</span>}</span>More
+        </NavLink>
+      </nav>
     </div>
   );
 }

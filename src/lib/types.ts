@@ -77,6 +77,9 @@ export interface Activity {
   credits: number;
   openForRequests: boolean;
   createdBy: string;
+  /** Names copied at save time, so members (who can't read other members' profiles) still see who organises. */
+  createdByName?: string | null;
+  leadName?: string | null;
   createdAt?: Date | null;
   reviewedBy?: string | null;
   reviewNote?: string | null;
@@ -89,6 +92,8 @@ export interface Participation {
   id: string; // `${activityId}_${uid}`
   activityId: string;
   uid: string;
+  /** Copied at sign-up so a member-organiser can see who volunteered. */
+  userName?: string | null;
   status: ParticipationStatus;
   source: 'request' | 'assigned' | 'volunteer';
   note: string | null;
@@ -165,10 +170,23 @@ export interface AppNotification {
 export interface Feedback {
   id: string;
   authorUid: string;
+  authorName?: string | null;
   rating: number;
   category: string;
   message: string;
   status: 'new' | 'reviewed';
+  hrNote: string | null;
+  createdAt?: Date | null;
+}
+
+export interface DeptRequest {
+  id: string;
+  uid: string;
+  userName: string;
+  fromDept: string | null;
+  toDept: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'declined';
   hrNote: string | null;
   createdAt?: Date | null;
 }

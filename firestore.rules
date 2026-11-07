@@ -65,8 +65,11 @@ service cloud.firestore {
     }
     function isChairDoc(d) { return d.role in ['chairman', 'admin']; }
 
+    function isCoreDoc(d) { return d.role in ['chairman', 'admin', 'vice_chairman', 'executive', 'board', 'hod']; }
+
     match /users/{id} {
-      allow read: if isActive() || (signedIn() && uid() == id);
+      // Members are only visible to the core team. Everyone can see the core team (their points of contact) and themselves.
+      allow read: if isCore() || (signedIn() && uid() == id) || (isActive() && isCoreDoc(resource.data));
 
       allow create: if validProfile(request.resource.data) && (
         // Chairman / Vice Chairman add people. Only the Chairman can appoint a Vice Chairman.
@@ -90,6 +93,9 @@ service cloud.firestore {
           // The Chairman's own record: only the Chairman edits it, and can never lose access.
           || (isChairDoc(resource.data) && isChair() && uid() == id
               && isChairDoc(request.resource.data) && request.resource.data.status == 'active')
+          // HR head and top leadership can move a member to another department (department change requests).
+          || ((isHodOf('hr') || isTop()) && resource.data.role in ['member', 'core']
+              && changed().hasOnly(['departmentId', 'updatedAt']))
           // Chairman / Vice Chairman manage everyone else. Nobody can be made Chairman;
           // only the Chairman can appoint or change a Vice Chairman.
           || (isPeopleAdmin() && !isChairDoc(resource.data) && !isChairDoc(request.resource.data)
@@ -316,6 +322,22 @@ service cloud.firestore {
       allow update: if (isLeadership() || inHr())
         && changed().hasOnly(['status', 'hrNote', 'reviewedBy', 'reviewedAt']);
       allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------- department change requests (to HR)
+    match /deptRequests/{id} {
+      allow read: if isActive() && (resource.data.uid == uid() || inHr() || isLeadership());
+      allow create: if isActive() && request.resource.data.uid == uid()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.toDept is string
+        && str(request.resource.data.reason, 1000)
+        && str(request.resource.data.userName, 120);
+      // HR members can add notes; only the HR head or top leadership approve (they also move the member).
+      allow update: if (inHr() || isLeadership())
+        && changed().hasOnly(['status', 'hrNote', 'reviewedBy', 'reviewedAt'])
+        && request.resource.data.status in ['pending', 'approved', 'declined']
+        && (request.resource.data.status != 'approved' || isHodOf('hr') || isTop());
+      allow delete: if isActive() && resource.data.uid == uid() && resource.data.status == 'pending';
     }
 
     match /{document=**} {

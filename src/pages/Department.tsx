@@ -19,7 +19,7 @@ export function DepartmentPage() {
   const people = users.filter((u) => u.status === 'active' && u.departmentId === d.id).sort(bySeniority);
   const heads = people.filter((u) => normRole(u.role) === 'hod');
   const members = people.filter((u) => normRole(u.role) !== 'hod');
-  const emails = people.map((u) => u.email).join(',');
+  const emails = can.isCore ? people.map((u) => u.email).join(',') : '';
   const meetings = activities.filter((a) => a.type === 'meeting' && a.status === 'upcoming' && a.departmentId === d.id);
   const work = activities.filter((a) => a.type !== 'meeting' && a.status === 'upcoming' && a.departmentId === d.id);
   const canSeeTasks = can.isLeadership || (can.isHod && can.dept === d.id);
@@ -42,10 +42,14 @@ export function DepartmentPage() {
             <div className="tier">Head{heads.length === 1 ? '' : 's'} of Department</div>
             {heads.length === 0 ? <div className="card card-pad small muted">No head assigned yet.</div> : <div className="people-grid">{heads.map((u) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} showDept={false} />)}</div>}
           </section>
-          <section className="stack-sm">
-            <div className="tier">Members · {members.length}</div>
-            {members.length === 0 ? <div className="card card-pad small muted">No members yet.</div> : <div className="people-grid">{members.map((u) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} showDept={false} />)}</div>}
-          </section>
+          {can.isCore ? (
+            <section className="stack-sm">
+              <div className="tier">Members · {members.length}</div>
+              {members.length === 0 ? <div className="card card-pad small muted">No members yet.</div> : <div className="people-grid">{members.map((u) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} showDept={false} />)}</div>}
+            </section>
+          ) : (
+            <div className="callout info">Your department head is your point of contact. The member list is visible to the core team only.</div>
+          )}
           {canSeeTasks && (
             <section className="card">
               <div className="card-head"><div><h2>Department tasks</h2><p>{deptTasks.filter((t) => t.status === 'done').length} of {deptTasks.length} done</p></div><Link to="/tasks" className="btn btn-sm">Open tasks</Link></div>

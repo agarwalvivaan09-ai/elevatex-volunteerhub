@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth, createAuthAccount, db } from './firebase';
-import type { Activity, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
+import type { Activity, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
 import { TYPE_LABEL } from './types';
 import { computeEdpi, EDPI_SETTINGS } from './edpi';
 import { DEPARTMENTS, LEGACY_DEPARTMENTS, LEGACY_POSITIONS, POSITIONS } from './structure';
@@ -88,6 +88,7 @@ export async function clearNotifications(ids: string[]) {
   }
 }
 
+const nameOf = (users: UserProfile[], id: string) => users.find((u) => u.id === id)?.name ?? auth.currentUser?.displayName ?? null;
 const activeIds = (users: UserProfile[]) => users.filter((u) => u.status === 'active').map((u) => u.id);
 const coreIds = (users: UserProfile[]) => users.filter((u) => u.status === 'active' && isCoreRole(u.role)).map((u) => u.id);
 
@@ -221,6 +222,7 @@ function activityAnnouncement(a: { type: Activity['type']; title: string; startA
 export async function saveActivity(input: ActivityInput, ctx: { users: UserProfile[]; invitees?: string[] }, id?: string): Promise<string> {
   const data = {
     ...input,
+    leadName: input.leadUid ? nameOf(ctx.users, input.leadUid) : null,
     startAt: Timestamp.fromDate(input.startAt),
     endAt: input.endAt ? Timestamp.fromDate(input.endAt) : null,
     updatedAt: serverTimestamp(),
@@ -229,7 +231,7 @@ export async function saveActivity(input: ActivityInput, ctx: { users: UserProfi
     await updateDoc(doc(db, 'activities', id), data);
     return id;
   }
-  const ref = await addDoc(collection(db, 'activities'), { ...data, createdBy: uid(), createdAt: serverTimestamp(), reviewedBy: null, reviewNote: null });
+  const ref = await addDoc(collection(db, 'activities'), { ...data, createdBy: uid(), createdByName: nameOf(ctx.users, uid()), createdAt: serverTimestamp(), reviewedBy: null, reviewNote: null });
   const link = `/activities/${ref.id}`;
   if (input.status === 'proposed') {
     await notifySafe(coreIds(ctx.users), { kind: 'proposal', title: `Drive proposal needs approval: ${input.title}`, body: `Proposed for ${fmtDateTime(input.startAt)}`, link });
@@ -291,11 +293,12 @@ const blankParticipation = {
   verifiedAt: null,
 };
 
-export async function volunteer(a: Activity, note: string) {
+export async function volunteer(a: Activity, note: string, myName: string) {
   const me = uid();
   await setDoc(doc(db, 'participations', pid(a.id, me)), {
     activityId: a.id,
     uid: me,
+    userName: myName,
     status: 'approved',
     source: 'volunteer',
     note: note.trim() || null,
@@ -308,15 +311,17 @@ export async function volunteer(a: Activity, note: string) {
     updatedAt: serverTimestamp(),
   });
   const organiser = a.leadUid ?? a.createdBy;
-  await notifySafe([organiser], { kind: 'volunteer', title: `New volunteer for ${a.title}`, body: auth.currentUser?.email ?? undefined, link: `/activities/${a.id}` });
+  await notifySafe([organiser], { kind: 'volunteer', title: `New volunteer for ${a.title}`, body: myName, link: `/activities/${a.id}` });
 }
 
 export const withdraw = (p: Participation) => deleteDoc(doc(db, 'participations', p.id));
 
-export async function addVolunteer(a: Activity, memberUid: string, assignment: string) {
+export async function addVolunteer(a: Activity, member: UserProfile, assignment: string) {
+  const memberUid = member.id;
   await setDoc(doc(db, 'participations', pid(a.id, memberUid)), {
     activityId: a.id,
     uid: memberUid,
+    userName: member.name,
     status: 'approved',
     source: 'assigned',
     note: null,
@@ -428,9 +433,10 @@ export async function editTask(t: Task, patch: { title: string; description: str
 export const deleteTask = (t: Task) => deleteDoc(doc(db, 'tasks', t.id));
 
 // ---------------------------------------------------------------- HR feedback
-export async function submitFeedback(f: { rating: number; category: string; message: string }, hrUids: string[]) {
+export async function submitFeedback(f: { rating: number; category: string; message: string }, hrUids: string[], myName: string) {
   await addDoc(collection(db, 'feedback'), {
     authorUid: uid(),
+    authorName: myName,
     rating: f.rating,
     category: f.category,
     message: f.message.trim(),
@@ -447,6 +453,33 @@ export async function reviewFeedback(f: Feedback, hrNote: string) {
 
 export async function requestFeedback(users: UserProfile[], message: string) {
   await notify(activeIds(users), { kind: 'feedback', title: 'HR would like your feedback', body: message || 'Tell us how your experience at ElevateX is going.', link: '/feedback' });
+}
+
+// ---------------------------------------------------------------- department change requests
+export async function requestDeptChange(r: { userName: string; fromDept: string | null; toDept: string; reason: string }, hrUids: string[]) {
+  await addDoc(collection(db, 'deptRequests'), {
+    uid: uid(),
+    userName: r.userName,
+    fromDept: r.fromDept,
+    toDept: r.toDept,
+    reason: r.reason.trim(),
+    status: 'pending',
+    hrNote: null,
+    createdAt: serverTimestamp(),
+  });
+  await notifySafe(hrUids, { kind: 'feedback', title: `Department change request from ${r.userName}`, body: r.reason.slice(0, 120), link: '/hr' });
+}
+
+export const withdrawDeptRequest = (r: DeptRequest) => deleteDoc(doc(db, 'deptRequests', r.id));
+
+/** Approve moves the member to the new department in the same batch. */
+export async function decideDeptRequest(r: DeptRequest, status: 'approved' | 'declined' | 'pending', hrNote: string) {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'deptRequests', r.id), { status, hrNote: hrNote.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp() });
+  if (status === 'approved') batch.update(doc(db, 'users', r.uid), { departmentId: r.toDept, updatedAt: serverTimestamp() });
+  await batch.commit();
+  if (status !== 'pending')
+    await notifySafe([r.uid], { kind: 'feedback', title: status === 'approved' ? 'Your department change was approved' : 'Your department change request was declined', body: hrNote || undefined, link: '/hr' });
 }
 
 // ---------------------------------------------------------------- EDPI

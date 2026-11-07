@@ -39,6 +39,9 @@ Rules that always apply:
 - **EDPI.** After a drive is completed, the volunteers who attended can enter its EDPI results. The plan is locked before the drive starts and can never be changed.
 - **Protected roles.** Nobody can be made Chairman from the app, and the Chairman can never be removed. Only the Chairman can appoint a Vice Chairman. Each department has at most 2 heads.
 
+- **Privacy.** Members never see other members. They only see the core team, who are their point of contact, with one-tap email. Each member's dashboard shows their own contact: their department head, or the Head of HR, or the Chairman. Names on volunteer lists and feedback are copied onto those records, so organisers can see who signed up without being able to browse members.
+- **Department changes go through HR.** Anyone can ask to move department from **HR → Change department**. HR members can add notes. The Head of HR, or the Chairman, Vice Chairman, CEO or COO, approves the request, and the member is moved automatically.
+
 These permissions are enforced in [`firestore.rules`](firestore.rules) and covered by `tests/rules.test.ts`.
 
 **Departments:** Finance (CFO), Marketing (CMO), HR, Project Operations and Drive Execution.
@@ -130,6 +133,15 @@ tests/                     EDPI and security-rule tests
 - New page: add a file in `src/pages/`, a `<Route>` in `src/App.tsx` and a link in `src/components/Layout.tsx`.
 - New field on activities: add it to `types.ts`, the form, and, if it must be validated, `validActivity()` in `firestore.rules`.
 - EDPI settings (weights, normal cost and so on) are kept in one place: `EDPI_SETTINGS` in `src/lib/edpi.ts`.
+
+### On phones
+The Hub works like an app. Open it in Chrome or Safari and choose **Add to Home Screen**. Phones get a bottom tab bar (Home, Drives, Meetings, Tasks, More) and large buttons. Data is cached on the device, so the Hub opens instantly and keeps working when the connection is poor.
+
+### Linking from elevate-x.in
+The Hub links back to elevate-x.in from the sidebar, the More menu and the sign-in page. To add a button on the public site, paste this into its navbar:
+```html
+<a href="https://agarwalvivaan09-ai.github.io/elevatex-volunteerhub/" class="link-btn strong">Volunteer login</a>
+```
 
 ### Notes
 - **Deleting a sign-in account completely.** *Remove access* blocks the person immediately. To also delete their login, go to Firebase console → Authentication → Users.

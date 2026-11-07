@@ -13,7 +13,13 @@ import { IconMail, IconPlus, IconUsers } from '../components/icons';
 
 export { RoleBadge };
 
+/** Core team: the full people list. Members: their contacts (the core team) only. */
 export function MembersPage() {
+  const { can } = useMe();
+  return can.isCore ? <PeoplePage /> : <ContactsPage />;
+}
+
+function PeoplePage() {
   const { can } = useMe();
   const { users, positionById, departmentById, departments, participations } = useData();
   const [q, setQ] = useState('');
@@ -42,7 +48,7 @@ export function MembersPage() {
     <>
       <div className="page-head">
         <div>
-          <h1>{can.isPeopleAdmin ? 'People' : 'Directory'}</h1>
+          <h1>People</h1>
           <p>{users.filter((u) => u.status === 'active').length} active members. Email anyone directly from here.</p>
         </div>
         <div className="page-actions">
@@ -109,6 +115,32 @@ export function MembersPage() {
 
       {adding && <PersonModal onClose={() => setAdding(false)} />}
       {editing && <PersonModal u={editing} onClose={() => setEditing(null)} />}
+    </>
+  );
+}
+
+/** What members see instead of the people list: the core team, their points of contact. */
+function ContactsPage() {
+  const { profile } = useMe();
+  const { users, positionById, departmentById } = useData();
+  const core = users.filter((u) => u.status === 'active' && u.id !== profile.id).sort(bySeniority);
+  const myHeads = core.filter((u) => normRole(u.role) === 'hod' && u.departmentId && u.departmentId === profile.departmentId);
+  const leadership = core.filter((u) => ['chairman', 'vice_chairman', 'executive'].includes(normRole(u.role)));
+  const board = core.filter((u) => normRole(u.role) === 'board');
+  const heads = core.filter((u) => normRole(u.role) === 'hod' && !myHeads.includes(u));
+  const card = (u: UserProfile) => <PersonCard key={u.id} u={u} positionById={positionById} departmentById={departmentById} />;
+  return (
+    <>
+      <div className="page-head">
+        <div><h1>Contacts</h1><p>The core team is your point of contact for anything at ElevateX. Tap the envelope to email them.</p></div>
+      </div>
+      <div className="stack">
+        {myHeads.length > 0 && <section className="stack-sm"><div className="tier">Your department head{myHeads.length > 1 ? 's' : ''} — start here</div><div className="people-grid">{myHeads.map(card)}</div></section>}
+        {leadership.length > 0 && <section className="stack-sm"><div className="tier">Leadership</div><div className="people-grid">{leadership.map(card)}</div></section>}
+        {heads.length > 0 && <section className="stack-sm"><div className="tier">{myHeads.length ? 'Other heads of department' : 'Heads of department'}</div><div className="people-grid">{heads.map(card)}</div></section>}
+        {board.length > 0 && <section className="stack-sm"><div className="tier">Board of Advisors</div><div className="people-grid">{board.map(card)}</div></section>}
+        {core.length === 0 && <div className="card"><Empty title="No contacts yet" icon={<IconUsers />} /></div>}
+      </div>
     </>
   );
 }

@@ -61,8 +61,10 @@ async function main() {
   ];
   const pos = Object.fromEntries(POSITIONS.map((p) => [p.id, p]));
   const uid = {};
+  const nameByUid = {};
   for (const [key, email, name, positionId, departmentId, title] of people) {
     uid[key] = await createUser(email);
+    nameByUid[uid[key]] = name;
     await put(`users/${uid[key]}`, { name, email, role: pos[positionId].role, status: 'active', positionId, departmentId, title, bio: null, responsibilities: null, joinedAt: day(-200) });
   }
   await put('meta/bootstrap', { adminUid: uid.chair, at: new Date() });
@@ -85,10 +87,10 @@ async function main() {
     food: drive({ title: 'Community Food Drive', status: 'completed', startAt: day(-20, 10), endAt: hrs(day(-20, 10), 4), venue: 'Community Hall, Block C', createdBy: uid.drives, leadUid: uid.drives, description: 'Meals for 800 people.' }),
     trees: drive({ title: 'Plantation Drive', status: 'completed', startAt: day(-55, 8), endAt: hrs(day(-55, 8), 3), venue: 'City Park', createdBy: uid.rohan, leadUid: uid.rohan, description: 'Planting 150 saplings.' }),
   };
-  for (const [id, a] of Object.entries(acts)) await put(`activities/${id}`, a);
+  for (const [id, a] of Object.entries(acts)) await put(`activities/${id}`, { ...a, leadName: nameByUid[a.leadUid] ?? null, createdByName: nameByUid[a.createdBy] ?? null });
 
   const P = (aid, who, extra) => put(`participations/${aid}_${uid[who]}`, {
-    activityId: aid, uid: uid[who], status: 'approved', source: 'volunteer', note: null, assignment: null, reviewNote: null, reviewedBy: null, reviewedAt: null,
+    activityId: aid, uid: uid[who], userName: nameByUid[uid[who]], status: 'approved', source: 'volunteer', note: null, assignment: null, reviewNote: null, reviewedBy: null, reviewedAt: null,
     attendance: null, attendanceBy: null, hoursLogged: null, hoursNote: null, hoursStatus: 'none', verifiedHours: null, credits: 0, verifiedBy: null, verifiedAt: null, createdAt: day(-2), ...extra,
   });
   const V = (h) => ({ attendance: 'present', hoursLogged: h, hoursStatus: 'verified', verifiedHours: h, credits: 1, verifiedBy: uid.drives, verifiedAt: day(-1) });
@@ -113,8 +115,8 @@ async function main() {
   await T('Reconcile food drive receipts', 'ishaan', 'cfo', 'finance', 2, 'done', 'Matches Rs. 50,000');
   await T('Call 3 new recruits for onboarding', 'meera', 'hr', 'hr', 5);
 
-  await add('feedback', { authorUid: uid.member, rating: 4, category: 'Drives & events', message: 'Loved the food drive. Would like clearer instructions the day before.', status: 'new', hrNote: null, createdAt: day(-4) });
-  await add('feedback', { authorUid: uid.rohan, rating: 2, category: 'Workload', message: 'Too many tasks landed in the same week as exams.', status: 'new', hrNote: null, createdAt: day(-2) });
+  await add('feedback', { authorName: 'Ananya Iyer', authorUid: uid.member, rating: 4, category: 'Drives & events', message: 'Loved the food drive. Would like clearer instructions the day before.', status: 'new', hrNote: null, createdAt: day(-4) });
+  await add('feedback', { authorName: 'Rohan Gupta', authorUid: uid.rohan, rating: 2, category: 'Workload', message: 'Too many tasks landed in the same week as exams.', status: 'new', hrNote: null, createdAt: day(-2) });
 
   const N = (who, title, body, link, kind) => add('notifications', { uid: uid[who], title, body, link, kind, read: false, createdBy: uid.chair, createdAt: day(-1) });
   await N('member', 'New drive: Winter Blanket Drive', 'Shelter Home, Sector 12', '/activities/blanket', 'drive');

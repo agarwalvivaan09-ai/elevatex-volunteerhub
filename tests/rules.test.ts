@@ -188,3 +188,25 @@ describe('notifications', () => {
     await assertFails(deleteDoc(doc(as('fin'), 'notifications/n1')));
   });
 });
+
+describe('privacy & department changes', () => {
+  it('members only see core-team profiles and themselves', async () => {
+    await assertFails(getDoc(doc(as('fin'), 'users/mkt')));
+    await assertSucceeds(getDoc(doc(as('fin'), 'users/fin')));
+    await assertSucceeds(getDoc(doc(as('fin'), 'users/cmo')));
+    await assertSucceeds(getDocs(query(collection(as('fin'), 'users'), where('role', 'in', ['chairman', 'admin', 'vice_chairman', 'executive', 'board', 'hod']))));
+    await assertFails(getDocs(collection(as('fin'), 'users')));
+    await assertSucceeds(getDocs(collection(as('cmo'), 'users')));
+  });
+  it('anyone requests a department change; HR head approves and moves them', async () => {
+    await assertSucceeds(setDoc(doc(as('fin'), 'deptRequests/r1'), { uid: 'fin', userName: 'fin', fromDept: 'finance', toDept: 'marketing', reason: 'I love filming', status: 'pending', hrNote: null }));
+    await assertSucceeds(getDoc(doc(as('hrmember'), 'deptRequests/r1')));
+    await assertFails(getDoc(doc(as('mkt'), 'deptRequests/r1')));
+    await assertFails(updateDoc(doc(as('hrmember'), 'deptRequests/r1'), { status: 'approved' }));
+    await assertSucceeds(updateDoc(doc(as('hrmember'), 'deptRequests/r1'), { hrNote: 'Recommend yes' }));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'deptRequests/r1'), { status: 'approved' }));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'users/fin'), { departmentId: 'marketing' }));
+    await assertFails(updateDoc(doc(as('hrhead'), 'users/fin'), { role: 'hod' }));
+    await assertFails(updateDoc(doc(as('cmo'), 'users/fin'), { departmentId: 'marketing' }));
+  });
+});

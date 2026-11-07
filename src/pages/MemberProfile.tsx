@@ -35,7 +35,7 @@ export function MemberProfilePage() {
 
   return (
     <>
-      <Link to="/members" className="backlink"><IconChevronLeft width={16} />{can.isPeopleAdmin ? 'People' : 'Directory'}</Link>
+      <Link to="/members" className="backlink"><IconChevronLeft width={16} />{can.isCore ? 'People' : 'Contacts'}</Link>
       <section className="card card-pad" style={{ marginBottom: 20 }}>
         <div className="row" style={{ gap: 16, alignItems: 'center' }}>
           <Avatar name={u.name} size="lg" />

@@ -1,0 +1,13 @@
+{
+  "name": "ElevateX Volunteer Hub",
+  "short_name": "ElevateX Hub",
+  "description": "Drives, meetings, tasks and volunteer hours for ElevateX members.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FAF9F6",
+  "theme_color": "#1F3D2B",
+  "icons": [
+    { "src": "logo-icon.png", "sizes": "500x500", "type": "image/png", "purpose": "any" }
+  ]
+}

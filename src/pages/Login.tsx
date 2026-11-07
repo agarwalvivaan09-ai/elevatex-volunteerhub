@@ -60,7 +60,7 @@ export function LoginPage() {
             <li>Build a verified record of your contribution</li>
           </ul>
         </div>
-        <p className="small" style={{ opacity: 0.6 }}>© {new Date().getFullYear()} ElevateX. Internal use only.</p>
+        <p className="small" style={{ opacity: 0.75 }}>© {new Date().getFullYear()} ElevateX · <a href="https://elevate-x.in" style={{ color: '#fff' }}>elevate-x.in</a></p>
       </section>
       <main className="auth-main">
         <form className="auth-box" onSubmit={submit}>
@@ -89,6 +89,7 @@ export function LoginPage() {
             Accounts are created by the Chairman or Vice Chairman. New members get an email with a link to set their password.
             Google sign-in works if your Gmail address is the one you were registered with.
           </p>
+          <a className="small" href="https://elevate-x.in" style={{ textAlign: 'center' }}>← Back to elevate-x.in</a>
         </form>
       </main>
     </div>

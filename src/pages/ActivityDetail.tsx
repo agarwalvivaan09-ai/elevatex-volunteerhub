@@ -67,6 +67,7 @@ export function ActivityDetailPage() {
   if (!canSeeActivity(a, profile, myVolunteering)) return <Empty title="This meeting isn't for you">It's only visible to the people invited.</Empty>;
 
   const lead = a.leadUid ? userById.get(a.leadUid) : userById.get(a.createdBy);
+  const leadName = lead?.name ?? a.leadName ?? a.createdByName ?? null;
   const volunteers = parts.filter((p) => p.status === 'approved');
   const isMeeting = a.type === 'meeting';
   const showEdpiTab = isScorable && a.status !== 'proposed' && a.status !== 'declined' && (can.isCore || canManage || attended);
@@ -86,7 +87,7 @@ export function ActivityDetailPage() {
           <div className="row small muted" style={{ marginTop: 6, gap: 16 }}>
             <span className="meta-line"><IconClock />{fmtRange(a.startAt, a.endAt)}</span>
             <span className="meta-line"><IconPin />{a.mode === 'online' ? 'Online' : a.venue}</span>
-            {lead && <span className="meta-line"><IconLead />{isMeeting ? 'Host' : 'Organised by'} {lead.name}</span>}
+            {leadName && <span className="meta-line"><IconLead />{isMeeting ? 'Host' : 'Organised by'} {leadName}</span>}
           </div>
         </div>
         <div className="page-actions">
@@ -110,7 +111,7 @@ export function ActivityDetailPage() {
         </div>
       )}
 
-      {tab === 'overview' && <Overview a={a} lead={lead} volunteerCount={volunteers.length} showCount={canManage || can.isCore} myPart={myPart} />}
+      {tab === 'overview' && <Overview a={a} lead={lead} leadName={leadName} volunteerCount={volunteers.length} showCount={canManage || can.isCore} myPart={myPart} />}
       {tab === 'volunteers' && canManage && <Volunteers a={a} parts={parts} />}
       {tab === 'attendance' && canManage && <Attendance a={a} parts={volunteers} />}
       {tab === 'edpi' && showEdpiTab && <EdpiPanel a={a} parts={parts} record={record} canManage={canManage} />}
@@ -153,7 +154,7 @@ function ProposalBanner({ a, users }: { a: Activity; users: UserProfile[] }) {
     return <div className="callout warn" style={{ marginBottom: 18 }}><b>Awaiting approval.</b> {a.createdBy === profile.id ? 'The core team has been notified. You can still edit the details while you wait.' : 'A core team member needs to approve this drive.'}</div>;
   return (
     <section className="card card-pad stack" style={{ marginBottom: 18, borderColor: 'var(--warn)' }}>
-      <div><h2>Drive proposal from {userById.get(a.createdBy)?.name ?? 'a member'}</h2><p className="small muted">Approving publishes it and notifies every member so they can volunteer.</p></div>
+      <div><h2>Drive proposal from {userById.get(a.createdBy)?.name ?? a.createdByName ?? 'a member'}</h2><p className="small muted">Approving publishes it and notifies every member so they can volunteer.</p></div>
       <Field label="Note to the organiser (optional)"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       <div className="row">
         <button className="btn btn-primary" disabled={busy} onClick={() => run(() => api.reviewProposal(a, 'upcoming', note, users), 'Approved — everyone notified')}><IconCheck />Approve & publish</button>
@@ -164,7 +165,7 @@ function ProposalBanner({ a, users }: { a: Activity; users: UserProfile[] }) {
 }
 
 // ------------------------------------------------------------------ overview
-function Overview({ a, lead, volunteerCount, showCount, myPart }: { a: Activity; lead?: UserProfile; volunteerCount: number; showCount: boolean; myPart?: Participation }) {
+function Overview({ a, lead, leadName, volunteerCount, showCount, myPart }: { a: Activity; lead?: UserProfile; leadName: string | null; volunteerCount: number; showCount: boolean; myPart?: Participation }) {
   const { departmentById, activityById } = useData();
   const related = a.relatedActivityId ? activityById.get(a.relatedActivityId) : undefined;
   return (
@@ -190,7 +191,7 @@ function Overview({ a, lead, volunteerCount, showCount, myPart }: { a: Activity;
           <dl className="detail-list">
             <dt>When</dt><dd>{fmtRange(a.startAt, a.endAt)}</dd>
             <dt>Where</dt><dd>{a.mode === 'online' ? 'Online' : a.venue}</dd>
-            <dt>{a.type === 'meeting' ? 'Host' : 'Organiser'}</dt><dd>{lead ? <><Link to={`/members/${lead.id}`}>{lead.name}</Link> · <a href={`mailto:${lead.email}`}>email</a></> : '—'}</dd>
+            <dt>{a.type === 'meeting' ? 'Host' : 'Organiser'}</dt><dd>{lead ? <><Link to={`/members/${lead.id}`}>{lead.name}</Link> · <a href={`mailto:${lead.email}`}>email</a></> : leadName ?? '—'}</dd>
             {a.departmentId && (<><dt>Department</dt><dd>{departmentById.get(a.departmentId)?.name ?? '—'}</dd></>)}
             {related && (<><dt>For</dt><dd><Link to={`/activities/${related.id}`}>{related.title}</Link></dd></>)}
             {a.type !== 'meeting' && (<><dt>Volunteers</dt><dd>{showCount ? `${volunteerCount}${a.capacity ? ` / ${a.capacity}` : ''}` : a.capacity ? `${a.capacity} spots` : 'Open'}</dd></>)}
@@ -203,6 +204,7 @@ function Overview({ a, lead, volunteerCount, showCount, myPart }: { a: Activity;
 }
 
 function MyParticipation({ a, p }: { a: Activity; p?: Participation }) {
+  const { profile } = useMe();
   const [note, setNote] = useState('');
   const [hours, setHours] = useState('');
   const [hoursNote, setHoursNote] = useState('');
@@ -219,7 +221,7 @@ function MyParticipation({ a, p }: { a: Activity; p?: Participation }) {
           <Field label="Note for the organiser (optional)">
             <input className="input" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Availability, skills…" />
           </Field>
-          <button className="btn btn-primary btn-block" disabled={busy} onClick={() => run(() => api.volunteer(a, note), "You're on the volunteer list!")}>
+          <button className="btn btn-primary btn-block" disabled={busy} onClick={() => run(() => api.volunteer(a, note, profile.name), "You're on the volunteer list!")}>
             <IconUsers />Volunteer
           </button>
         </>
@@ -257,6 +259,7 @@ function MyParticipation({ a, p }: { a: Activity; p?: Participation }) {
 
 // ------------------------------------------------------------------ volunteer list (organiser)
 function Volunteers({ a, parts }: { a: Activity; parts: Participation[] }) {
+  const { can } = useMe();
   const { userById, positionById, departmentById, users } = useData();
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Participation | null>(null);
@@ -271,11 +274,11 @@ function Volunteers({ a, parts }: { a: Activity; parts: Participation[] }) {
         <div><h2>Volunteer list</h2><p>{parts.filter((p) => p.status === 'approved').length} volunteering{a.capacity ? ` of ${a.capacity} spots` : ''}.</p></div>
         <div className="row">
           {emails && <a className="btn btn-sm" href={`mailto:?bcc=${emails}&subject=${encodeURIComponent(a.title)}`}><IconMail />Email all</a>}
-          <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}><IconPlus />Add volunteer</button>
+          {can.isCore && <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}><IconPlus />Add volunteer</button>}
         </div>
       </div>
       {sorted.length === 0 ? (
-        <Empty title="No volunteers yet" icon={<IconUsers />}>Members volunteer from this page. You can also add them yourself.</Empty>
+        <Empty title="No volunteers yet" icon={<IconUsers />}>Members volunteer from this page and you'll be notified.</Empty>
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -289,7 +292,7 @@ function Volunteers({ a, parts }: { a: Activity; parts: Participation[] }) {
                     <td>
                       <div className="person">
                         <Avatar name={u?.name ?? '?'} size="sm" />
-                        <div><Link to={`/members/${p.uid}`}>{u?.name ?? 'Unknown'}</Link><div className="tiny muted">{u ? displayTitle(u, positionById) : ''}{dept ? ` · ${dept}` : ''}</div></div>
+                        <div>{u ? <Link to={`/members/${p.uid}`}>{u.name}</Link> : <b>{p.userName ?? 'Volunteer'}</b>}<div className="tiny muted">{u ? displayTitle(u, positionById) : ''}{dept ? ` · ${dept}` : ''}</div></div>
                       </div>
                     </td>
                     <td className="small">{p.assignment ?? <span className="muted">—</span>}</td>
@@ -314,8 +317,8 @@ function Volunteers({ a, parts }: { a: Activity; parts: Participation[] }) {
         </div>
       )}
       {adding && <AddVolunteerModal a={a} existing={new Set(parts.map((p) => p.uid))} users={users} onClose={() => setAdding(false)} />}
-      {editing && <RoleModal p={editing} name={userById.get(editing.uid)?.name ?? ''} onClose={() => setEditing(null)} />}
-      {removing && <RemoveModal p={removing} a={a} name={userById.get(removing.uid)?.name ?? ''} onClose={() => setRemoving(null)} />}
+      {editing && <RoleModal p={editing} name={userById.get(editing.uid)?.name ?? editing.userName ?? ''} onClose={() => setEditing(null)} />}
+      {removing && <RemoveModal p={removing} a={a} name={userById.get(removing.uid)?.name ?? removing.userName ?? ''} onClose={() => setRemoving(null)} />}
     </section>
   );
 }
@@ -348,7 +351,7 @@ function AddVolunteerModal({ a, existing, users, onClose }: { a: Activity; exist
   const options = users.filter((u) => u.status === 'active' && !existing.has(u.id));
   return (
     <Modal title={`Add to ${a.title}`} onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy || !uid} onClick={async () => { if (await run(() => api.addVolunteer(a, uid, assignment), 'Added and notified')) onClose(); }}>Add</button></>}>
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy || !uid} onClick={async () => { if (await run(() => api.addVolunteer(a, users.find((x) => x.id === uid)!, assignment), 'Added and notified')) onClose(); }}>Add</button></>}>
       <Field label="Member">
         <select className="select" value={uid} onChange={(e) => setUid(e.target.value)}>
           <option value="">Choose a member…</option>
@@ -390,7 +393,7 @@ function Attendance({ a, parts }: { a: Activity; parts: Participation[] }) {
           <div className="table-wrap">
             <table className="table">
               <thead><tr><th>Volunteer</th><th>Attendance</th><th>Logged</th><th>Verified hours</th><th className="num">Status</th></tr></thead>
-              <tbody>{parts.map((p) => <AttendanceRow key={p.id} a={a} p={p} name={userById.get(p.uid)?.name ?? 'Unknown'} />)}</tbody>
+              <tbody>{parts.map((p) => <AttendanceRow key={p.id} a={a} p={p} name={userById.get(p.uid)?.name ?? p.userName ?? 'Volunteer'} />)}</tbody>
             </table>
           </div>
         )}

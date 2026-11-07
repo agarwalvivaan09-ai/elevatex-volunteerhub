@@ -6,7 +6,7 @@ import {
   signOut,
   type Auth,
 } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { connectFirestoreEmulator, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache } from 'firebase/firestore';
 
 const env = import.meta.env;
 export const useEmulators = env.VITE_USE_EMULATORS === 'true';
@@ -32,7 +32,10 @@ function connect(auth: Auth) {
 
 export const app: FirebaseApp = initializeApp(firebaseConfigured ? config : { apiKey: 'missing', projectId: 'missing' });
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Offline cache: the Hub opens instantly from the device's cache and syncs in the background.
+export const db = initializeFirestore(app, {
+  localCache: useEmulators ? memoryLocalCache() : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 connect(auth);
 if (useEmulators) connectFirestoreEmulator(db, emulatorHost, 8080);
 

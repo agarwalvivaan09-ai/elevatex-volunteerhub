@@ -42,7 +42,7 @@ export function ReviewPage() {
                     <Avatar name={by?.name ?? '?'} />
                     <div style={{ minWidth: 0 }}>
                       <div><Link to={`/activities/${a.id}`}><b>{a.title}</b></Link></div>
-                      <div className="small muted">Proposed by {by?.name ?? 'a member'} · {fmtDateTime(a.startAt)} · {a.mode === 'online' ? 'Online' : a.venue}</div>
+                      <div className="small muted">Proposed by {by?.name ?? a.createdByName ?? 'a member'} · {fmtDateTime(a.startAt)} · {a.mode === 'online' ? 'Online' : a.venue}</div>
                       {a.description && <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 520 }}>{a.description}</div>}
                     </div>
                   </div>
