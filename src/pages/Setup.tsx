@@ -1,3 +1,4 @@
+import { LOGO } from '../lib/paths';
 import { useEffect, useState } from 'react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -10,7 +11,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="center-page">
       <div className="card card-pad stack">
         <div className="auth-logo">
-          <img src="/logo-icon.png" alt="ElevateX logo" />
+          <img src={LOGO} alt="ElevateX logo" />
           <div><b>ElevateX</b><div className="muted small">Volunteer Hub</div></div>
         </div>
         {children}

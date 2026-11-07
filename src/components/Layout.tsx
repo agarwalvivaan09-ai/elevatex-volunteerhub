@@ -1,3 +1,4 @@
+import { LOGO } from '../lib/paths';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
@@ -24,7 +25,7 @@ export function Layout() {
     <div className={`shell ${open ? 'nav-open' : ''}`}>
       <aside className="sidebar" aria-label="Main navigation">
         <NavLink to="/" className="brand">
-          <img src="/logo-icon.png" alt="" />
+          <img src={LOGO} alt="" />
           <div><b>ElevateX</b><span>Volunteer Hub</span></div>
         </NavLink>
         <nav className="nav">
@@ -57,7 +58,7 @@ export function Layout() {
       <div className="main">
         <header className="topbar">
           <button className="icon-btn" aria-label="Open menu" onClick={() => setOpen(true)}><IconMenu /></button>
-          <img src="/logo-icon.png" alt="" />
+          <img src={LOGO} alt="" />
           <b>ElevateX Hub</b>
         </header>
         <main className="content">{ready ? <Outlet /> : <Loading />}</main>

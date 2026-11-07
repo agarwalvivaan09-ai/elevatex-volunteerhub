@@ -1,3 +1,4 @@
+import { LOGO } from '../lib/paths';
 import { useState, type FormEvent } from 'react';
 import { GoogleAuthProvider, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -46,7 +47,7 @@ export function LoginPage() {
     <div className="auth-wrap">
       <section className="auth-side">
         <div className="auth-logo">
-          <img src="/logo-icon.png" alt="" style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,.25))' }} />
+          <img src={LOGO} alt="" style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,.25))' }} />
           <b style={{ fontSize: 18 }}>ElevateX</b>
         </div>
         <div>
@@ -64,7 +65,7 @@ export function LoginPage() {
       <main className="auth-main">
         <form className="auth-box" onSubmit={submit}>
           <div className="auth-logo">
-            <img src="/logo-icon.png" alt="ElevateX logo" />
+            <img src={LOGO} alt="ElevateX logo" />
             <div>
               <h1>Sign in</h1>
               <p className="muted small">ElevateX Volunteer Hub</p>
