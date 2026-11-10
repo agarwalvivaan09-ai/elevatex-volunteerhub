@@ -7,7 +7,7 @@ import { DEPT, meetingInvitees } from '../lib/access';
 import type { ActivityLink, ActivityType, Audience, Mode } from '../lib/types';
 import { AUDIENCE_LABEL, TYPE_LABEL } from '../lib/types';
 import { fmtDateTime, toLocalInput } from '../lib/format';
-import { Field, useAction } from '../components/ui';
+import { Field, useAction, useToast } from '../components/ui';
 import { IconChevronLeft, IconMap, IconPlus, IconVideo, IconX } from '../components/icons';
 
 const isHttps = (s: string) => /^https:\/\/\S+\.\S+/i.test(s.trim());
@@ -26,6 +26,7 @@ export function ActivityFormPage() {
   const existing = id ? activityById.get(id) : undefined;
   const navigate = useNavigate();
   const { busy, run } = useAction();
+  const toast = useToast();
 
   // Types this person can create (drives can always be proposed).
   const allowedTypes: ActivityType[] = [
@@ -129,8 +130,13 @@ export function ActivityFormPage() {
     const volunteerUids = new Set(participations.filter((p) => p.activityId === input.relatedActivityId && p.status === 'approved').map((p) => p.uid));
     const invitees = isMeeting ? meetingInvitees({ ...input, id: '', createdBy: profile.id }, users, volunteerUids).map((u) => u.id) : undefined;
     let newId = id;
-    const ok = await run(async () => { newId = await saveActivity(input, { users, invitees }, id); },
-      id ? 'Saved' : proposing ? 'Proposal sent to the core team for approval' : isMeeting ? `Meeting scheduled — ${invitees?.length ?? 0} people notified` : 'Published — everyone has been notified');
+    let notified = 0;
+    const ok = await run(async () => { const r = await saveActivity(input, { users, invitees }, id); newId = r.id; notified = r.notified; });
+    if (ok) {
+      if (id) toast('Saved');
+      else if (notified < 0) toast('Saved, but notifications could not be sent. Ask the Chairman to republish the latest firestore.rules in Firebase.', 'error');
+      else toast(proposing ? 'Proposal sent to the core team for approval' : isMeeting ? `Meeting scheduled. ${notified} people notified (you included).` : `Published. ${notified} members notified.`);
+    }
     if (ok) navigate(`/activities/${newId}`);
   }
 

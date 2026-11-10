@@ -13,7 +13,7 @@ export interface NavSection { label: string | null; items: NavItem[] }
 /** One definition of the app's navigation, used by the sidebar, the phone tab bar and the More page. */
 export function useNav() {
   const { profile, can } = useMe();
-  const { notifications, tasks, activities, participations, activityById, feedback, deptRequests, departmentById } = useData();
+  const { notifications, tasks, activities, participations, activityById, feedback, deptRequests, certRequests, departmentById } = useData();
 
   const unread = notifications.filter((n) => !n.read).length;
   const openTasks = tasks.filter((t) => t.assigneeUid === profile.id && t.status !== 'done').length;
@@ -24,7 +24,9 @@ export function useNav() {
         return p.hoursStatus === 'pending' && !!a && can.canManageActivity(a) && (p.uid !== profile.id || can.isLeadership);
       }).length
     : 0;
-  const hr = can.canSeeFeedback ? feedback.filter((f) => f.status === 'new').length + deptRequests.filter((r) => r.status === 'pending').length : 0;
+  const hr = can.canSeeFeedback
+    ? feedback.filter((f) => f.status === 'new').length + deptRequests.filter((r) => r.status === 'pending').length + certRequests.filter((r) => r.status === 'pending' && r.uid !== profile.id).length
+    : 0;
   const myDept = profile.departmentId ? departmentById.get(profile.departmentId) : undefined;
 
   const sections: NavSection[] = [
@@ -42,7 +44,7 @@ export function useNav() {
       label: 'You',
       items: [
         { to: '/contributions', label: 'My hours', icon: <IconClock />, hint: 'Verified hours and history' },
-        { to: '/hr', label: 'HR', icon: <IconChat />, count: hr, hint: can.canSeeFeedback ? 'Feedback and department requests' : 'Give feedback or change department' },
+        { to: '/hr', label: 'HR', icon: <IconChat />, count: hr, hint: can.canSeeFeedback ? 'Feedback, certificates, department requests' : 'Certificates, feedback, change department' },
         { to: '/profile', label: 'My profile', icon: <IconUser /> },
       ],
     },
@@ -53,6 +55,7 @@ export function useNav() {
             { to: '/review', label: 'Approvals', icon: <IconInbox />, count: approvals, hint: 'Drive proposals and hours' },
             { to: '/members', label: 'People', icon: <IconUsers />, hint: 'Everyone at ElevateX' },
             { to: '/analytics', label: 'Analytics', icon: <IconChart />, hint: 'Hours and drive scores' },
+            ...(can.canRecordPast ? [{ to: '/record', label: 'Record past activity', icon: <IconClock />, hint: 'Add past drives, events and hours' }] : []),
           ],
         }]
       : []),

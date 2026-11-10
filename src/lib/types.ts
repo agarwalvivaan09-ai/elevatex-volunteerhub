@@ -83,6 +83,8 @@ export interface Activity {
   createdAt?: Date | null;
   reviewedBy?: string | null;
   reviewNote?: string | null;
+  /** Recorded after the fact by top leadership (past drives, events). */
+  backfilled?: boolean;
 }
 
 export type ParticipationStatus = 'requested' | 'approved' | 'deferred' | 'rejected';
@@ -190,6 +192,35 @@ export interface DeptRequest {
   hrNote: string | null;
   createdAt?: Date | null;
 }
+
+export type CertKind = 'activity' | 'hours' | 'membership' | 'role';
+export interface CertRequest {
+  id: string;
+  uid: string;
+  userName: string;
+  kind: CertKind;
+  /** For 'activity' certificates. */
+  activityId: string | null;
+  activityTitle: string | null;
+  /** The requester's verified hours when they asked (for 'hours' certificates). */
+  hoursAtRequest: number | null;
+  /** Their position when they asked (for 'role' certificates). */
+  positionTitle: string | null;
+  nameOnCertificate: string;
+  note: string | null;
+  status: 'pending' | 'issued' | 'declined';
+  hrNote: string | null;
+  certificateUrl: string | null;
+  certificateId: string | null;
+  createdAt?: Date | null;
+}
+
+export const CERT_LABEL: Record<CertKind, string> = {
+  activity: 'Participation in a drive or event',
+  hours: 'Volunteering hours',
+  membership: 'Membership of ElevateX',
+  role: 'Position or role held',
+};
 
 export const ROLE_LABEL: Record<Role, string> = {
   chairman: 'Chairman',

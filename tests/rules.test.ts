@@ -210,3 +210,33 @@ describe('privacy & department changes', () => {
     await assertFails(updateDoc(doc(as('cmo'), 'users/fin'), { departmentId: 'marketing' }));
   });
 });
+
+describe('recording past activities & certificates', () => {
+  const past2 = Timestamp.fromDate(new Date(Date.now() - 30 * 86400000));
+  it('only Chairman, Vice Chairman, CEO, COO record completed activities (maps link optional)', async () => {
+    const old = act({ status: 'completed', startAt: past2, mapUrl: null, backfilled: true });
+    await assertSucceeds(setDoc(doc(as('ceo'), 'activities/old1'), { ...old, createdBy: 'ceo' }));
+    await assertFails(setDoc(doc(as('board'), 'activities/old2'), { ...old, createdBy: 'board' }));
+    await assertFails(setDoc(doc(as('drivehead'), 'activities/old3'), { ...old, createdBy: 'drivehead' }));
+    await assertFails(setDoc(doc(as('cmo'), 'activities/old4'), act({ createdBy: 'cmo', type: 'event', mapUrl: null, backfilled: true })));
+  });
+  it('they can add verified hours and a locked EDPI plan to a past drive', async () => {
+    await seed((db) => setDoc(doc(db, 'activities/old'), act({ status: 'completed', startAt: past2, createdBy: 'chair', backfilled: true, mapUrl: null })));
+    const vdb = as('vice');
+    const bb = writeBatch(vdb);
+    bb.set(doc(vdb, 'participations/old_mkt'), part('mkt', 'old', { source: 'assigned', attendance: 'present', hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
+    bb.set(doc(vdb, 'participations/old_fin'), part('fin', 'old', { source: 'assigned', attendance: 'present', hoursStatus: 'verified', verifiedHours: 2.5, credits: 1 }));
+    await assertSucceeds(bb.commit());
+    await assertSucceeds(setDoc(doc(as('ceo'), 'edpi/old'), { plan, locked: true, results: null }));
+    await assertFails(setDoc(doc(as('drivehead'), 'edpi/old'), { plan, locked: false, results: null }));
+  });
+  it('anyone requests a certificate; HR issues it', async () => {
+    const r = { uid: 'board', userName: 'board', kind: 'hours', nameOnCertificate: 'Board Person', note: null, status: 'pending', activityId: null, certificateUrl: null, hrNote: null };
+    await assertSucceeds(setDoc(doc(as('board'), 'certRequests/c1'), r));
+    await assertSucceeds(setDoc(doc(as('fin'), 'certRequests/c2'), { ...r, uid: 'fin' }));
+    await assertFails(setDoc(doc(as('fin'), 'certRequests/c3'), { ...r, uid: 'mkt' }));
+    await assertFails(getDoc(doc(as('mkt'), 'certRequests/c2')));
+    await assertSucceeds(updateDoc(doc(as('hrmember'), 'certRequests/c2'), { status: 'issued', certificateUrl: 'https://drive.google.com/x', certificateId: 'EX-2026-001' }));
+    await assertFails(updateDoc(doc(as('fin'), 'certRequests/c2'), { status: 'issued' }));
+  });
+});

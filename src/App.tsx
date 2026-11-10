@@ -28,6 +28,7 @@ const NotificationsPage = named(() => import('./pages/Notifications'), 'Notifica
 const HrPage = named(() => import('./pages/Feedback'), 'HrPage');
 const DepartmentPage = named(() => import('./pages/Department'), 'DepartmentPage');
 const MorePage = named(() => import('./pages/More'), 'MorePage');
+const RecordPage = named(() => import('./pages/Record'), 'RecordPage');
 
 function CoreOnly({ children }: { children: ReactNode }) {
   const { can } = useMe();
@@ -68,6 +69,7 @@ function Gate() {
                 <Route path="edpi" element={<CalculatorPage />} />
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="more" element={<MorePage />} />
+                <Route path="record" element={<RecordPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>

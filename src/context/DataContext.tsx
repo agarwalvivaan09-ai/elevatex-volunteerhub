@@ -3,7 +3,7 @@ import { collection, onSnapshot, query, where, type Query } from 'firebase/fires
 import { db } from '../lib/firebase';
 import { fromFirestore } from '../lib/api';
 import { useMe } from './AuthContext';
-import type { Activity, AppNotification, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Task, UserProfile } from '../lib/types';
+import type { Activity, AppNotification, CertRequest, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Task, UserProfile } from '../lib/types';
 
 /**
  * Live, shared data for the whole signed-in app. Every list is a realtime
@@ -24,6 +24,8 @@ interface Data {
   feedback: Feedback[];
   /** HR & leadership: all. Others: their own. */
   deptRequests: DeptRequest[];
+  /** HR & leadership: all. Others: their own. */
+  certRequests: CertRequest[];
   /** Core team: everyone. Members: the core team and themselves. */
   userById: Map<string, UserProfile>;
   positionById: Map<string, Position>;
@@ -105,13 +107,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byCreatedDesc,
   );
 
+  const [certRequests, r10] = useLive<CertRequest>(
+    can.canSeeFeedback ? 'certRequests:all' : `certRequests:${me}`,
+    can.canSeeFeedback ? col('certRequests') : () => query(collection(db, 'certRequests'), where('uid', '==', me)),
+    byCreatedDesc,
+  );
+
   const tasks = useMemo(() => {
     const m = new Map<string, Task>();
     for (const t of [...tasksAll, ...tasksDept, ...tasksMine, ...tasksByMe]) m.set(t.id, t);
     return [...m.values()].sort((a, b) => (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity));
   }, [tasksAll, tasksDept, tasksMine, tasksByMe]);
 
-  const ready = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && t1 && t2 && t3 && t4;
+  const ready = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10 && t1 && t2 && t3 && t4;
 
   const value = useMemo<Data>(
     () => ({
@@ -126,12 +134,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
       notifications,
       feedback,
       deptRequests,
+      certRequests,
       userById: new Map(users.map((u) => [u.id, u])),
       positionById: new Map(positions.map((p) => [p.id, p])),
       departmentById: new Map(departments.map((d) => [d.id, d])),
       activityById: new Map(activities.map((a) => [a.id, a])),
     }),
-    [ready, users, positions, departments, activities, participations, edpi, tasks, notifications, feedback, deptRequests],
+    [ready, users, positions, departments, activities, participations, edpi, tasks, notifications, feedback, deptRequests, certRequests],
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

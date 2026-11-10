@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '../lib/api';
+import { useMe } from '../context/AuthContext';
 import type { Activity, EdpiRecord, Participation } from '../lib/types';
 import { computeEdpi, EDPI_SETTINGS, validatePlan } from '../lib/edpi';
 import { fmtDateTime, fmtHours, fmtNum, fmtRs } from '../lib/format';
@@ -63,6 +64,10 @@ function PlanForm({ a, record, started }: { a: Activity; record?: EdpiRecord; st
   });
   const [confirmLock, setConfirmLock] = useState(false);
   const { busy, run } = useAction();
+  const { can } = useMe();
+  // Chairman, Vice Chairman, CEO and COO can record the plan of a drive that already happened.
+  const backfill = started && !record && can.canRecordPast;
+  const frozen = started && !backfill;
   const set = (k: keyof typeof f, v: string | number) => setF((x) => ({ ...x, [k]: v }));
 
   const plan = {
@@ -78,7 +83,7 @@ function PlanForm({ a, record, started }: { a: Activity; record?: EdpiRecord; st
   const keys = ['plannedVolunteers', 'plannedHours', 'impactTarget', 'impactUnit', 'budget', 'hasPartner'] as const;
   const dirty = !record || keys.some((k) => record.plan[k] !== plan[k]);
 
-  if (started && !record)
+  if (started && !record && !backfill)
     return (
       <div className="callout warn">
         <b>The drive has already started</b> ({fmtDateTime(a.startAt)}), so a plan can no longer be created — EDPI only accepts plans written down and locked before the drive.
@@ -93,38 +98,40 @@ function PlanForm({ a, record, started }: { a: Activity; record?: EdpiRecord; st
         {record && <span className="badge warn">Draft — not locked</span>}
       </div>
       <div className="card-body stack">
-        {started ? (
+        {backfill ? (
+          <div className="callout info">This drive has already happened. Enter the plan as it was set before the drive. It's saved locked, and you can then enter the results.</div>
+        ) : frozen ? (
           <div className="callout warn">The drive has started, so the plan can't be edited any more. Lock it to start recording results.</div>
         ) : null}
         <div className="form-grid">
           <Field label="Planned volunteers" hint="How many volunteers you expect to take part">
-            <input className="input" type="number" min={1} disabled={started} value={f.plannedVolunteers} onChange={(e) => set('plannedVolunteers', e.target.value)} />
+            <input className="input" type="number" min={1} disabled={frozen} value={f.plannedVolunteers} onChange={(e) => set('plannedVolunteers', e.target.value)} />
           </Field>
           <Field label="Planned hours (each)" hint="Average hours you expect from each volunteer">
-            <input className="input" type="number" min={0.5} step={0.5} disabled={started} value={f.plannedHours} onChange={(e) => set('plannedHours', e.target.value)} />
+            <input className="input" type="number" min={0.5} step={0.5} disabled={frozen} value={f.plannedHours} onChange={(e) => set('plannedHours', e.target.value)} />
           </Field>
           <Field label="Impact target" hint="One countable number">
-            <input className="input" type="number" min={1} disabled={started} value={f.impactTarget} onChange={(e) => set('impactTarget', e.target.value)} />
+            <input className="input" type="number" min={1} disabled={frozen} value={f.impactTarget} onChange={(e) => set('impactTarget', e.target.value)} />
           </Field>
           <Field label="Impact unit" hint="“500 meals served” works. “Help the community” can't be counted.">
-            <input className="input" disabled={started} value={f.impactUnit} onChange={(e) => set('impactUnit', e.target.value)} placeholder="meals, kg, books, trees…" />
+            <input className="input" disabled={frozen} value={f.impactUnit} onChange={(e) => set('impactUnit', e.target.value)} placeholder="meals, kg, books, trees…" />
           </Field>
           <Field label="Budget (Rs.)" hint="The real amount set aside for this drive, not the month's fund">
-            <input className="input" type="number" min={1} disabled={started} value={f.budget} onChange={(e) => set('budget', e.target.value)} />
+            <input className="input" type="number" min={1} disabled={frozen} value={f.budget} onChange={(e) => set('budget', e.target.value)} />
           </Field>
           <Field label="Outside partner?" hint="At least one outside partner organisation">
-            <select className="select" disabled={started} value={f.hasPartner} onChange={(e) => set('hasPartner', Number(e.target.value))}>
+            <select className="select" disabled={frozen} value={f.hasPartner} onChange={(e) => set('hasPartner', Number(e.target.value))}>
               <option value={0}>No</option>
               <option value={1}>Yes</option>
             </select>
           </Field>
         </div>
         <p className="small muted">Normal cost per beneficiary is fixed at {fmtRs(EDPI_SETTINGS.NormalCost)} by ElevateX.</p>
-        {!started && errors.length > 0 && (f.plannedVolunteers || f.budget) ? <div className="callout warn">{errors[0]}</div> : null}
+        {!frozen && errors.length > 0 && (f.plannedVolunteers || f.budget) ? <div className="callout warn">{errors[0]}</div> : null}
         <div className="row">
-          {!started && (
-            <button className="btn btn-primary" disabled={busy || errors.length > 0 || !dirty} onClick={() => run(() => api.saveEdpiPlan(a.id, plan, !!record), 'Plan saved as draft')}>
-              {record ? 'Save changes' : 'Save plan'}
+          {!frozen && (
+            <button className="btn btn-primary" disabled={busy || errors.length > 0 || !dirty} onClick={() => run(() => api.saveEdpiPlan(a.id, plan, !!record, backfill), backfill ? 'Plan recorded and locked' : 'Plan saved as draft')}>
+              {record ? 'Save changes' : backfill ? 'Save plan (locked)' : 'Save plan'}
             </button>
           )}
           {record && (

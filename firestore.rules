@@ -132,7 +132,9 @@ service cloud.firestore {
         && d.credits is number && d.credits >= 0 && d.credits <= 10
         && d.openForRequests is bool
         && d.audience in ['all', 'core', 'hod', 'board', 'department', 'volunteers']
-        && ((d.mode == 'online' && httpsUrl(d.meetingUrl)) || (d.mode == 'in_person' && httpsUrl(d.mapUrl)));
+        && ((d.mode == 'online' && httpsUrl(d.meetingUrl)) || (d.mode == 'in_person' && httpsUrl(d.mapUrl))
+            // Past activities recorded after the fact may not have a maps link.
+            || (d.mode == 'in_person' && d.get('backfilled', false) == true));
     }
 
     // Who may call which meeting.
@@ -160,8 +162,11 @@ service cloud.firestore {
 
       allow create: if isActive() && validActivity(request.resource.data)
         && request.resource.data.createdBy == uid()
-        && request.resource.data.status in ['proposed', 'upcoming']
-        && (request.resource.data.status == 'upcoming' || request.resource.data.type == 'drive')
+        && (request.resource.data.status in ['proposed', 'upcoming']
+            // Chairman, Vice Chairman, CEO and COO can record past (completed) activities.
+            || (isTop() && request.resource.data.status == 'completed'))
+        && (request.resource.data.status != 'proposed' || request.resource.data.type == 'drive')
+        && (request.resource.data.get('backfilled', false) == false || isTop())
         && canCreateKind(request.resource.data);
 
       // Any core-team member may approve or decline a proposed drive (not their own).
@@ -172,6 +177,7 @@ service cloud.firestore {
 
       allow update: if validActivity(request.resource.data)
         && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.get('backfilled', false) == resource.data.get('backfilled', false)
         && canManage(resource.data)
         && (request.resource.data.type == resource.data.type || isLeadership())
         && (request.resource.data.type != 'meeting' || canMeet(request.resource.data))
@@ -258,7 +264,9 @@ service cloud.firestore {
       function samePlan() { return request.resource.data.plan == resource.data.plan; }
 
       allow read: if isCore() || canManage(a()) || presentVolunteer(activityId);
-      allow create: if canManage(a()) && request.resource.data.locked == false && request.time < a().startAt;
+      allow create: if (canManage(a()) && request.resource.data.locked == false && request.time < a().startAt)
+        // Top leadership can record the plan of a past drive (already locked).
+        || (isTop() && request.resource.data.locked == true);
       allow update: if (
           // Draft plan: organisers only, before the drive starts, no results yet.
           (canManage(a()) && resource.data.locked == false && request.resource.data.locked == false
@@ -337,6 +345,22 @@ service cloud.firestore {
         && changed().hasOnly(['status', 'hrNote', 'reviewedBy', 'reviewedAt'])
         && request.resource.data.status in ['pending', 'approved', 'declined']
         && (request.resource.data.status != 'approved' || isHodOf('hr') || isTop());
+      allow delete: if isActive() && resource.data.uid == uid() && resource.data.status == 'pending';
+    }
+
+    // ---------------------------------------------------------------- certificate requests (to HR)
+    match /certRequests/{id} {
+      allow read: if isActive() && (resource.data.uid == uid() || inHr() || isLeadership());
+      allow create: if isActive() && request.resource.data.uid == uid()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.kind in ['activity', 'hours', 'membership', 'role']
+        && str(request.resource.data.nameOnCertificate, 120)
+        && optStr(request.resource.data.get('note', null), 1000)
+        && request.resource.data.get('certificateUrl', null) == null;
+      allow update: if (inHr() || isLeadership())
+        && changed().hasOnly(['status', 'hrNote', 'certificateUrl', 'certificateId', 'reviewedBy', 'reviewedAt'])
+        && request.resource.data.status in ['pending', 'issued', 'declined']
+        && (request.resource.data.get('certificateUrl', null) == null || httpsUrl(request.resource.data.certificateUrl));
       allow delete: if isActive() && resource.data.uid == uid() && resource.data.status == 'pending';
     }
 

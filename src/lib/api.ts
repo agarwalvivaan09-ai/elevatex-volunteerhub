@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth, createAuthAccount, db } from './firebase';
-import type { Activity, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
+import type { Activity, CertKind, CertRequest, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
 import { TYPE_LABEL } from './types';
 import { computeEdpi, EDPI_SETTINGS } from './edpi';
 import { DEPARTMENTS, LEGACY_DEPARTMENTS, LEGACY_POSITIONS, POSITIONS } from './structure';
@@ -48,10 +48,13 @@ const uid = () => {
 // ---------------------------------------------------------------- notifications
 export interface NotifyInput { title: string; body?: string; link?: string; kind: string }
 
-/** In-app notifications, fanned out in batches. The sender is never notified of their own action. */
-export async function notify(uids: Iterable<string>, n: NotifyInput) {
+/**
+ * In-app notifications, fanned out in batches. The sender is skipped unless includeSelf is set
+ * (meeting hosts want their meeting in their own list too). Returns how many were sent.
+ */
+export async function notify(uids: Iterable<string>, n: NotifyInput, includeSelf = false): Promise<number> {
   const me = auth.currentUser?.uid;
-  const targets = [...new Set(uids)].filter((u) => u && u !== me);
+  const targets = [...new Set(uids)].filter((u) => u && (includeSelf || u !== me));
   for (let i = 0; i < targets.length; i += 400) {
     const batch = writeBatch(db);
     for (const t of targets.slice(i, i + 400)) {
@@ -68,9 +71,13 @@ export async function notify(uids: Iterable<string>, n: NotifyInput) {
     }
     await batch.commit();
   }
+  return targets.length;
 }
 /** Notifications are best-effort: a failure never blocks the main action. */
-const notifySafe = (uids: Iterable<string>, n: NotifyInput) => notify(uids, n).catch((e) => console.warn('notify failed', e));
+const notifySafe = (uids: Iterable<string>, n: NotifyInput) => notify(uids, n).catch((e) => { console.warn('notify failed', e); return -1; });
+
+/** Result of saving something that also notifies people: how many were notified, or -1 if sending failed. */
+export interface SaveResult { id: string; notified: number }
 
 export const markRead = (id: string) => updateDoc(doc(db, 'notifications', id), { read: true, readAt: serverTimestamp() });
 export async function markAllRead(ids: string[]) {
@@ -219,7 +226,7 @@ function activityAnnouncement(a: { type: Activity['type']; title: string; startA
  *  - a proposed drive → the core team, for approval
  *  - a meeting → its invitees
  */
-export async function saveActivity(input: ActivityInput, ctx: { users: UserProfile[]; invitees?: string[] }, id?: string): Promise<string> {
+export async function saveActivity(input: ActivityInput, ctx: { users: UserProfile[]; invitees?: string[] }, id?: string): Promise<SaveResult> {
   const data = {
     ...input,
     leadName: input.leadUid ? nameOf(ctx.users, input.leadUid) : null,
@@ -229,18 +236,21 @@ export async function saveActivity(input: ActivityInput, ctx: { users: UserProfi
   };
   if (id) {
     await updateDoc(doc(db, 'activities', id), data);
-    return id;
+    return { id, notified: 0 };
   }
   const ref = await addDoc(collection(db, 'activities'), { ...data, createdBy: uid(), createdByName: nameOf(ctx.users, uid()), createdAt: serverTimestamp(), reviewedBy: null, reviewNote: null });
   const link = `/activities/${ref.id}`;
+  let notified: number;
   if (input.status === 'proposed') {
-    await notifySafe(coreIds(ctx.users), { kind: 'proposal', title: `Drive proposal needs approval: ${input.title}`, body: `Proposed for ${fmtDateTime(input.startAt)}`, link });
+    notified = await notifySafe(coreIds(ctx.users), { kind: 'proposal', title: `Drive proposal needs approval: ${input.title}`, body: `Proposed for ${fmtDateTime(input.startAt)}`, link });
   } else if (input.type === 'meeting') {
-    await notifySafe(ctx.invitees ?? [], { kind: 'meeting', ...activityAnnouncement(input), title: `Meeting: ${input.title}`, link });
+    const me = uid();
+    notified = await notify([...(ctx.invitees ?? []), me], { kind: 'meeting', ...activityAnnouncement(input), title: `Meeting: ${input.title}`, link }, true)
+      .catch((e) => { console.warn('notify failed', e); return -1; });
   } else {
-    await notifySafe(activeIds(ctx.users), { kind: input.type, ...activityAnnouncement(input), link });
+    notified = await notifySafe(activeIds(ctx.users), { kind: input.type, ...activityAnnouncement(input), link });
   }
-  return ref.id;
+  return { id: ref.id, notified };
 }
 
 export async function reviewProposal(a: Activity, decision: 'upcoming' | 'declined', note: string, users: UserProfile[]) {
@@ -482,9 +492,112 @@ export async function decideDeptRequest(r: DeptRequest, status: 'approved' | 'de
     await notifySafe([r.uid], { kind: 'feedback', title: status === 'approved' ? 'Your department change was approved' : 'Your department change request was declined', body: hrNote || undefined, link: '/hr' });
 }
 
+// ---------------------------------------------------------------- past records (Chairman, Vice Chairman, CEO, COO)
+export interface PastAttendee { user: UserProfile; hours: number }
+
+/** Writes verified attendance + hours for each attendee. Nobody is notified. */
+async function writeVerifiedHours(activityId: string, credits: number, attendees: PastAttendee[]) {
+  const me = uid();
+  for (let i = 0; i < attendees.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const { user, hours } of attendees.slice(i, i + 400)) {
+      batch.set(doc(db, 'participations', pid(activityId, user.id)), {
+        activityId,
+        uid: user.id,
+        userName: user.name,
+        status: 'approved',
+        source: 'assigned',
+        note: null,
+        assignment: null,
+        reviewNote: null,
+        reviewedBy: me,
+        reviewedAt: serverTimestamp(),
+        attendance: 'present',
+        attendanceBy: me,
+        hoursLogged: hours,
+        hoursNote: 'Recorded after the event',
+        hoursStatus: 'verified',
+        verifiedHours: hours,
+        credits,
+        verifiedBy: me,
+        verifiedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+}
+
+export async function recordPastActivity(input: ActivityInput, attendees: PastAttendee[], users: UserProfile[]): Promise<string> {
+  const ref = await addDoc(collection(db, 'activities'), {
+    ...input,
+    status: 'completed',
+    backfilled: true,
+    openForRequests: false,
+    leadName: input.leadUid ? nameOf(users, input.leadUid) : null,
+    startAt: Timestamp.fromDate(input.startAt),
+    endAt: input.endAt ? Timestamp.fromDate(input.endAt) : null,
+    createdBy: uid(),
+    createdByName: nameOf(users, uid()),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    reviewedBy: null,
+    reviewNote: null,
+  });
+  await writeVerifiedHours(ref.id, input.credits, attendees);
+  return ref.id;
+}
+
+export const addPastHours = (a: Activity, attendees: PastAttendee[]) => writeVerifiedHours(a.id, a.credits, attendees);
+
+// ---------------------------------------------------------------- certificate requests (to HR)
+export async function requestCertificate(
+  r: { userName: string; kind: CertKind; activityId: string | null; activityTitle: string | null; hoursAtRequest: number | null; positionTitle: string | null; nameOnCertificate: string; note: string },
+  hrUids: string[],
+) {
+  await addDoc(collection(db, 'certRequests'), {
+    uid: uid(),
+    ...r,
+    nameOnCertificate: r.nameOnCertificate.trim(),
+    note: r.note.trim() || null,
+    status: 'pending',
+    hrNote: null,
+    certificateUrl: null,
+    certificateId: null,
+    createdAt: serverTimestamp(),
+  });
+  await notifySafe(hrUids, { kind: 'feedback', title: `Certificate request from ${r.userName}`, body: r.activityTitle ?? r.kind, link: '/hr?tab=certinbox' });
+}
+
+export const withdrawCertificate = (r: CertRequest) => deleteDoc(doc(db, 'certRequests', r.id));
+
+export async function decideCertificate(r: CertRequest, patch: { status: CertRequest['status']; hrNote: string; certificateUrl: string; certificateId: string }) {
+  await updateDoc(doc(db, 'certRequests', r.id), {
+    status: patch.status,
+    hrNote: patch.hrNote.trim() || null,
+    certificateUrl: patch.certificateUrl.trim() || null,
+    certificateId: patch.certificateId.trim() || null,
+    reviewedBy: uid(),
+    reviewedAt: serverTimestamp(),
+  });
+  if (patch.status !== 'pending' && patch.status !== r.status)
+    await notifySafe([r.uid], {
+      kind: 'feedback',
+      title: patch.status === 'issued' ? 'Your certificate is ready' : 'Your certificate request was declined',
+      body: patch.hrNote || undefined,
+      link: '/hr?tab=mycerts',
+    });
+}
+
 // ---------------------------------------------------------------- EDPI
-export async function saveEdpiPlan(activityId: string, plan: EdpiRecord['plan'], exists: boolean) {
-  const data = { plan: { ...plan, normalCost: EDPI_SETTINGS.NormalCost }, locked: false, results: null, score: null, flags: [], updatedAt: serverTimestamp(), updatedBy: uid() };
+/** lockNow: recording the plan of a past drive (top leadership only), saved already locked. */
+export async function saveEdpiPlan(activityId: string, plan: EdpiRecord['plan'], exists: boolean, lockNow = false) {
+  const data = {
+    plan: { ...plan, normalCost: EDPI_SETTINGS.NormalCost }, locked: lockNow, results: null, score: null, flags: [],
+    ...(lockNow ? { lockedAt: serverTimestamp(), lockedBy: uid() } : {}),
+    updatedAt: serverTimestamp(), updatedBy: uid(),
+  };
   if (exists) await updateDoc(doc(db, 'edpi', activityId), data);
   else await setDoc(doc(db, 'edpi', activityId), data);
 }

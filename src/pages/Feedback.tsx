@@ -4,14 +4,18 @@ import { useMe } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import * as api from '../lib/api';
 import { DEPT, normRole } from '../lib/access';
-import type { DeptRequest, Feedback, UserProfile } from '../lib/types';
+import type { CertKind, CertRequest, DeptRequest, Feedback, UserProfile } from '../lib/types';
+import { CERT_LABEL } from '../lib/types';
+import { summarise } from '../context/DataContext';
+import { fmtHours } from '../lib/format';
+import { displayTitle } from '../components/people';
 import { fmtDate, fmtNum } from '../lib/format';
 import { Avatar, Empty, Field, Modal, useAction } from '../components/ui';
 import { IconChat } from '../components/icons';
 
 const CATEGORIES = ['General experience', 'Drives & events', 'My department', 'Leadership & communication', 'Workload', 'Suggestion'];
 const FACES = ['', 'Very unhappy', 'Unhappy', 'Okay', 'Happy', 'Very happy'];
-type Tab = 'feedback' | 'department' | 'inbox' | 'requests';
+type Tab = 'feedback' | 'department' | 'inbox' | 'requests' | 'mycerts' | 'certinbox';
 
 /** Who receives HR notifications: the HR department (as far as this person can see), else top leadership. */
 function hrRecipients(users: UserProfile[]) {
@@ -21,25 +25,28 @@ function hrRecipients(users: UserProfile[]) {
 
 export function HrPage() {
   const { can, profile } = useMe();
-  const { feedback, deptRequests } = useData();
+  const { feedback, deptRequests, certRequests } = useData();
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as Tab) || (can.canSeeFeedback ? 'inbox' : 'feedback');
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
   const pendingReq = deptRequests.filter((r) => r.status === 'pending' && r.uid !== profile.id).length;
   const newFb = feedback.filter((f) => f.status === 'new').length;
+  const pendingCerts = certRequests.filter((r) => r.status === 'pending' && r.uid !== profile.id).length;
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>HR</h1>
-          <p>Tell HR how things are going, or ask to move to another department. Only the HR department and leadership can read what you send.</p>
+          <p>Ask for a certificate, tell HR how things are going, or ask to move to another department. Only the HR department and leadership can read what you send.</p>
         </div>
         {can.canSeeFeedback && can.isCore && <RequestButton />}
       </div>
       <div className="tabs">
         {can.canSeeFeedback && <button className={tab === 'inbox' ? 'on' : ''} onClick={() => setTab('inbox')}>Feedback inbox{newFb > 0 && <span className="count">{newFb}</span>}</button>}
         {can.canSeeFeedback && <button className={tab === 'requests' ? 'on' : ''} onClick={() => setTab('requests')}>Department requests{pendingReq > 0 && <span className="count">{pendingReq}</span>}</button>}
+        {can.canSeeFeedback && <button className={tab === 'certinbox' ? 'on' : ''} onClick={() => setTab('certinbox')}>Certificate requests{pendingCerts > 0 && <span className="count">{pendingCerts}</span>}</button>}
+        <button className={tab === 'mycerts' ? 'on' : ''} onClick={() => setTab('mycerts')}>Certificates</button>
         <button className={tab === 'feedback' ? 'on' : ''} onClick={() => setTab('feedback')}>Give feedback</button>
         <button className={tab === 'department' ? 'on' : ''} onClick={() => setTab('department')}>Change department</button>
       </div>
@@ -47,6 +54,8 @@ export function HrPage() {
       {tab === 'requests' && can.canSeeFeedback && <Requests list={deptRequests} />}
       {tab === 'feedback' && <Give mine={feedback.filter((f) => f.authorUid === profile.id)} />}
       {tab === 'department' && <ChangeDept mine={deptRequests.filter((r) => r.uid === profile.id)} />}
+      {tab === 'mycerts' && <MyCertificates mine={certRequests.filter((r) => r.uid === profile.id)} />}
+      {tab === 'certinbox' && can.canSeeFeedback && <CertificateInbox list={certRequests} />}
     </>
   );
 }
@@ -276,6 +285,166 @@ function FeedbackModal({ f, name, onClose }: { f: Feedback; name: string; onClos
       <p className="prose">{f.message}</p>
       {u && <Link to={`/members/${u.id}`} className="small">View their profile →</Link>}
       <Field label="Reply note (they see this)"><textarea className="textarea" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Thanks — we've spoken to your department head." /></Field>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- certificates
+const REGISTRY = 'https://docs.google.com/spreadsheets/d/1Y9_ZSJSbBYdHdLUxm2c-4R0Zm3UsfUSlPfkcIKJ3O04';
+const certTone = (s: CertRequest['status']) => (s === 'issued' ? 'ok' : s === 'declined' ? 'bad' : 'warn');
+const certText = (s: CertRequest['status']) => (s === 'issued' ? 'Ready' : s === 'declined' ? 'Declined' : 'Waiting for HR');
+
+function MyCertificates({ mine }: { mine: CertRequest[] }) {
+  const { profile } = useMe();
+  const { users, participations, activityById, positionById } = useData();
+  const attended = participations
+    .filter((p) => p.uid === profile.id && p.attendance === 'present')
+    .map((p) => ({ p, a: activityById.get(p.activityId) }))
+    .filter((x) => x.a)
+    .sort((x, y) => y.a!.startAt.getTime() - x.a!.startAt.getTime());
+  const hours = summarise(participations.filter((p) => p.uid === profile.id), activityById).verifiedHours;
+  const [kind, setKind] = useState<CertKind>(attended.length ? 'activity' : 'membership');
+  const [activityId, setActivityId] = useState('');
+  const [name, setName] = useState(profile.name);
+  const [note, setNote] = useState('');
+  const { busy, run } = useAction();
+  const position = displayTitle(profile, positionById);
+  const chosen = attended.find((x) => x.a!.id === activityId);
+  const valid = name.trim() && (kind !== 'activity' || chosen) && (kind !== 'hours' || hours > 0);
+
+  return (
+    <div className="layout-main-side">
+      <section className="card card-pad stack">
+        <div><h2>Request a certificate</h2><p className="small muted">HR checks your record and sends you the certificate here. Every certificate we issue is listed in the public certificate registry.</p></div>
+        <Field label="Certificate for">
+          <select className="select" value={kind} onChange={(e) => setKind(e.target.value as CertKind)}>
+            {(Object.keys(CERT_LABEL) as CertKind[]).map((k) => <option key={k} value={k}>{CERT_LABEL[k]}</option>)}
+          </select>
+        </Field>
+        {kind === 'activity' && (
+          attended.length === 0
+            ? <div className="callout warn">You don't have any attended drives or events on the Hub yet. Ask your department head to record your attendance first.</div>
+            : (
+              <Field label="Which one?">
+                <select className="select" value={activityId} onChange={(e) => setActivityId(e.target.value)}>
+                  <option value="">Choose…</option>
+                  {attended.map(({ p, a }) => <option key={p.id} value={a!.id}>{a!.title} · {a!.startAt.toLocaleDateString('en-IN')}{p.verifiedHours ? ` · ${fmtHours(p.verifiedHours)}` : ''}</option>)}
+                </select>
+              </Field>
+            )
+        )}
+        {kind === 'hours' && <div className="callout">{hours > 0 ? <>Your verified hours so far: <b>{fmtHours(hours)}</b>. The certificate will show this total.</> : 'You have no verified hours yet.'}</div>}
+        {kind === 'role' && <div className="callout">Your position on the Hub: <b>{position}</b>.</div>}
+        <Field label="Name to print on the certificate"><input className="input" maxLength={120} value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Anything HR should know? (optional)"><textarea className="textarea" maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Needed for a college application by 30 November." /></Field>
+        <button className="btn btn-primary" disabled={busy || !valid}
+          onClick={async () => {
+            const ok = await run(() => api.requestCertificate({
+              userName: profile.name,
+              kind,
+              activityId: kind === 'activity' ? chosen!.a!.id : null,
+              activityTitle: kind === 'activity' ? chosen!.a!.title : null,
+              hoursAtRequest: kind === 'hours' ? hours : null,
+              positionTitle: kind === 'role' ? position : null,
+              nameOnCertificate: name,
+              note,
+            }, hrRecipients(users)), 'Request sent to HR');
+            if (ok) { setNote(''); setActivityId(''); }
+          }}>Send request to HR</button>
+      </section>
+      <section className="card">
+        <div className="card-head"><h2>Your certificates</h2></div>
+        {mine.length === 0 ? <Empty title="No requests yet" /> : (
+          <ul className="list">
+            {mine.map((r) => (
+              <li key={r.id}>
+                <div className="spread"><b className="small">{r.activityTitle ?? CERT_LABEL[r.kind]}</b><span className={`badge ${certTone(r.status)}`}>{certText(r.status)}</span></div>
+                <p className="small muted">{fmtDate(r.createdAt)}{r.certificateId ? ` · ID ${r.certificateId}` : ''}</p>
+                {r.certificateUrl && <a className="btn btn-sm btn-primary" style={{ marginTop: 8 }} href={r.certificateUrl} target="_blank" rel="noopener noreferrer">Open certificate</a>}
+                {r.hrNote && <p className="small callout" style={{ marginTop: 8 }}>HR: {r.hrNote}</p>}
+                {r.status === 'pending' && <button className="btn btn-sm" style={{ marginTop: 8 }} disabled={busy} onClick={() => run(() => api.withdrawCertificate(r), 'Withdrawn')}>Withdraw</button>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CertificateInbox({ list }: { list: CertRequest[] }) {
+  const { profile } = useMe();
+  const [filter, setFilter] = useState<'pending' | 'all'>('pending');
+  const [open, setOpen] = useState<CertRequest | null>(null);
+  const shown = list.filter((r) => r.uid !== profile.id && (filter === 'all' || r.status === 'pending'));
+  return (
+    <>
+      <div className="spread" style={{ marginBottom: 14 }}>
+        <div className="segmented">
+          <button className={filter === 'pending' ? 'on' : ''} onClick={() => setFilter('pending')}>Waiting</button>
+          <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
+        </div>
+        <a className="btn btn-sm" href={REGISTRY} target="_blank" rel="noopener noreferrer">Open certificate registry</a>
+      </div>
+      <section className="card">
+        {shown.length === 0 ? <Empty title="No certificate requests" icon={<IconChat />} /> : (
+          <ul className="list">
+            {shown.map((r) => (
+              <li key={r.id}>
+                <button className="list-link" style={{ border: 'none', background: 'none', width: '100%', textAlign: 'left', cursor: 'pointer', padding: 0 }} onClick={() => setOpen(r)}>
+                  <Avatar name={r.userName} size="sm" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div><b>{r.userName}</b> <span className="small muted">· {fmtDate(r.createdAt)}</span></div>
+                    <p className="small muted">{r.activityTitle ?? CERT_LABEL[r.kind]}{r.hoursAtRequest ? ` · ${fmtHours(r.hoursAtRequest)}` : ''}{r.positionTitle ? ` · ${r.positionTitle}` : ''}</p>
+                  </div>
+                  <span className={`badge ${certTone(r.status)}`}>{certText(r.status)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {open && <CertModal r={open} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+function CertModal({ r, onClose }: { r: CertRequest; onClose: () => void }) {
+  const { participations, activityById } = useData();
+  const [url, setUrl] = useState(r.certificateUrl ?? '');
+  const [certId, setCertId] = useState(r.certificateId ?? '');
+  const [note, setNote] = useState(r.hrNote ?? '');
+  const { busy, run } = useAction();
+  // Core team can see the person's record; HR members who aren't core see what was captured with the request.
+  const record = participations.filter((p) => p.uid === r.uid && p.hoursStatus === 'verified');
+  const urlOk = !url || /^https:\/\/\S+/.test(url.trim());
+  const act = (status: CertRequest['status'], msg: string) => async () => {
+    if (await run(() => api.decideCertificate(r, { status, hrNote: note, certificateUrl: url, certificateId: certId }), msg)) onClose();
+  };
+  return (
+    <Modal title={`Certificate for ${r.userName}`} onClose={onClose}
+      footer={<>
+        <button className="btn" disabled={busy || !urlOk} onClick={act('pending', 'Saved')}>Save</button>
+        <button className="btn btn-danger" disabled={busy} onClick={act('declined', 'Declined. They have been told.')}>Decline</button>
+        <button className="btn btn-primary" disabled={busy || !url.trim() || !urlOk} onClick={act('issued', 'Issued. They have been notified.')}>Issue certificate</button>
+      </>}>
+      <dl className="detail-list">
+        <dt>For</dt><dd>{CERT_LABEL[r.kind]}</dd>
+        {r.activityTitle && (<><dt>Activity</dt><dd>{r.activityId && activityById.get(r.activityId) ? <Link to={`/activities/${r.activityId}`}>{r.activityTitle}</Link> : r.activityTitle}</dd></>)}
+        {r.hoursAtRequest != null && (<><dt>Hours</dt><dd>{fmtHours(r.hoursAtRequest)} verified when they asked</dd></>)}
+        {r.positionTitle && (<><dt>Position</dt><dd>{r.positionTitle}</dd></>)}
+        <dt>Print name</dt><dd><b>{r.nameOnCertificate}</b></dd>
+        {r.note && (<><dt>Their note</dt><dd>{r.note}</dd></>)}
+        {record.length > 0 && (<><dt>Hub record</dt><dd>{record.length} verified activities · {fmtHours(record.reduce((s, p) => s + (p.verifiedHours ?? 0), 0))}</dd></>)}
+      </dl>
+      <Field label="Certificate link" hint="Upload the certificate (e.g. Google Drive, shared as “anyone with the link”) and paste the link. They can open it from the Hub.">
+        <input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://drive.google.com/…" />
+      </Field>
+      {!urlOk && <div className="callout bad">The link must start with https://</div>}
+      <Field label="Certificate ID (optional)" hint={<>Add the same ID to the <a href={REGISTRY} target="_blank" rel="noopener noreferrer">certificate registry</a> so anyone can verify it.</>}>
+        <input className="input" value={certId} onChange={(e) => setCertId(e.target.value)} placeholder="e.g. EX-2026-041" />
+      </Field>
+      <Field label="Note to them (optional)"><textarea className="textarea" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
     </Modal>
   );
 }

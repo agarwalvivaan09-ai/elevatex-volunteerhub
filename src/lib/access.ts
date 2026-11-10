@@ -49,6 +49,8 @@ export function access(u: UserProfile) {
     isHod,
     isCore,
     isHodOf,
+    /** Chairman, Vice Chairman, CEO, COO: record past drives/events and assign hours. */
+    canRecordPast: isTop,
     /** Add / remove people, change positions and access. */
     isPeopleAdmin: isChair || isVice,
     canCreateDriveDirectly: isLeadership || isHodOf(DEPT.driveExec),
