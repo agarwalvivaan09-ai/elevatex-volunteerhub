@@ -143,7 +143,7 @@ function PlanForm({ a, record, started }: { a: Activity; record?: EdpiRecord; st
       </div>
       {confirmLock && (
         <Confirm title="Lock the plan?" confirmLabel="Lock plan"
-          message="Once locked, nobody can change these planning values — not even the Admin. A plan edited after the fact makes the score meaningless. Results can only be entered against a locked plan."
+          message="Once locked, nobody can change these planning values — not even the Chairman. A plan edited after the fact makes the score meaningless. Results can only be entered against a locked plan."
           onClose={() => setConfirmLock(false)} onConfirm={() => run(() => api.lockEdpiPlan(a.id), 'Plan locked')} />
       )}
     </section>

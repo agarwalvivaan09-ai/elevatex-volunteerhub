@@ -7,7 +7,7 @@ import { auth } from '../lib/firebase';
 import { ROLE_LABEL } from '../lib/types';
 import { Field, useAction } from '../components/ui';
 
-/** Members can edit only their own personal details. Position and access are managed by the Admin. */
+/** Members can edit only their own personal details. Position and access are managed by the Chairman and Vice Chairman. */
 export function ProfilePage() {
   const { profile } = useMe();
   const { positionById, departmentById } = useData();
@@ -22,7 +22,7 @@ export function ProfilePage() {
 
   return (
     <>
-      <div className="page-head"><div><h1>My profile</h1><p>Your personal details. Your position and access level are set by the Admin.</p></div></div>
+      <div className="page-head"><div><h1>My profile</h1><p>Your personal details. Your position and department are set by the Chairman or Vice Chairman.</p></div></div>
       <div className="layout-main-side">
         <section className="card card-pad stack">
           <div className="form-grid">

@@ -31,7 +31,7 @@ export const useToast = () => useContext(ToastCtx);
 export function friendlyError(e: unknown): string {
   const code = (e as { code?: string })?.code ?? '';
   const map: Record<string, string> = {
-    'permission-denied': "You don't have permission to do that. If you think you should, ask the Admin.",
+    'permission-denied': "You don't have permission to do that. If you think you should, ask your department head.",
     'auth/invalid-credential': 'Email or password is incorrect.',
     'auth/wrong-password': 'Email or password is incorrect.',
     'auth/user-not-found': 'Email or password is incorrect.',
