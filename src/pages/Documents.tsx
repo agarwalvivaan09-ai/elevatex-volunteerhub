@@ -9,6 +9,13 @@ import { fmtDate } from '../lib/format';
 import { Confirm, Empty, Field, Modal, useAction } from '../components/ui';
 import { IconLink, IconPlus } from '../components/icons';
 
+/** Official files that ship with the Hub (in public/files). Shown to every member, above the shared links. */
+const OFFICIAL = [
+  { id: 'brochure', title: 'ElevateX Brochure', description: 'Who we are, our work, events and how to join. 20 pages.', url: '/files/elevatex-brochure-0fda3bba8d8b.pdf' },
+  { id: 'edpi-framework', title: 'EDPI: Official Framework Document', description: 'The Drive Performance Index: what it measures, the formulas and how a drive is scored.', url: '/files/edpi-framework-0fda3bba8d8b.pdf' },
+  { id: 'edpi-guide', title: 'EDPI: Volunteer Guide', description: 'Step by step: planning, recording and scoring your drive.', url: '/files/edpi-volunteer-guide-0fda3bba8d8b.pdf' },
+];
+
 /** Brochures, templates, guides and logos: links to files in Google Drive, organised by department. */
 export function DocumentsPage() {
   const { profile, can } = useMe();
@@ -23,6 +30,7 @@ export function DocumentsPage() {
   const { run } = useAction();
   const canAdd = can.isLeadership || can.isHod;
   const shown = docs.filter((d) => !q || `${d.title} ${d.description ?? ''}`.toLowerCase().includes(q.toLowerCase()));
+  const official = OFFICIAL.filter((d) => !q || `${d.title} ${d.description}`.toLowerCase().includes(q.toLowerCase()));
   const groups = [
     { key: 'all', name: 'For everyone', list: shown.filter((d) => d.audience === 'all') },
     { key: 'core', name: 'Core team', list: shown.filter((d) => d.audience === 'core') },
@@ -38,7 +46,20 @@ export function DocumentsPage() {
           {canAdd && <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />Add document</button>}
         </div>
       </div>
-      {groups.length === 0 ? <div className="card"><Empty title={docs.length ? 'Nothing matches' : 'No documents yet'} icon={<IconLink />}>{canAdd && !docs.length ? 'Add the first one. Upload the file to Google Drive and paste the share link.' : null}</Empty></div> : (
+      {official.length > 0 && (
+        <section className="stack-sm" style={{ marginBottom: 18 }}>
+          <div className="tier">Official documents</div>
+          <div className="card menu-list">
+            {official.map((d) => (
+              <a key={d.id} className="menu-item" href={d.url} target="_blank" rel="noopener noreferrer">
+                <span className="mi-icon"><IconLink /></span>
+                <span className="mi-text"><b>{d.title}</b><span>{d.description}</span></span>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+      {groups.length === 0 ? (official.length ? null : <div className="card"><Empty title={docs.length ? 'Nothing matches' : 'No documents yet'} icon={<IconLink />}>{canAdd && !docs.length ? 'Add the first one. Upload the file to Google Drive and paste the share link.' : null}</Empty></div>) : (
         <div className="stack">
           {groups.map((g) => (
             <section key={g.key} className="stack-sm">
