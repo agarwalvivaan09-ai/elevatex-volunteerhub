@@ -65,7 +65,7 @@ export function AnalyticsPage() {
   return (
     <>
       <div className="page-head">
-        <div><h1>Analytics</h1><p>Verified volunteer hours and drive performance (EDPI).</p></div>
+        <div><h1>Analytics</h1><p>Credits, attendance and drive performance (EDPI).</p></div>
         <div className="segmented" role="group" aria-label="Time range">
           {([['3m', 'Last 3 months'], ['12m', 'Last 12 months'], ['all', 'All time']] as [Range, string][]).map(([k, l]) => (
             <button key={k} className={range === k ? 'on' : ''} onClick={() => setRange(k)}>{l}</button>
