@@ -52,11 +52,11 @@ export function LoginPage() {
         </div>
         <div>
           <h2>The internal home for every ElevateX volunteer.</h2>
-          <p>Drives, fundraisers and events in one place — with your requests, assignments and verified hours tracked automatically.</p>
+          <p>Drives, fundraisers, events and meetings in one place, with the credits you earn tracked automatically.</p>
           <ul>
             <li>See what's coming up and request to join</li>
             <li>Get approved and see your assignment</li>
-            <li>Log your hours after you take part</li>
+            <li>Earn credits every time you're marked present</li>
             <li>Build a verified record of your contribution</li>
           </ul>
         </div>

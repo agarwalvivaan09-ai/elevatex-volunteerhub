@@ -5,7 +5,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { useMe } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { migrateToV2 } from '../lib/api';
+import { migrateToV2, setActorName } from '../lib/api';
 import { displayTitle } from './people';
 import { SITE_URL, useNav } from './nav';
 import { Avatar, Loading } from './ui';
@@ -17,6 +17,8 @@ export function Layout() {
   const { sections, tabs, moreCount, unread } = useNav();
   const location = useLocation();
   const main = useRef<HTMLElement>(null);
+
+  useEffect(() => { setActorName(profile.name); }, [profile.name]);
 
   // Scroll to top on every page change (important on phones).
   useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);

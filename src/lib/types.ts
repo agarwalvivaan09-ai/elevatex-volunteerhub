@@ -5,7 +5,7 @@ import type { EdpiBreakdown } from './edpi';
  * Legacy v1 values ('admin', 'core') are still accepted and mapped in access.ts.
  */
 export type Role = 'chairman' | 'vice_chairman' | 'executive' | 'board' | 'hod' | 'member' | 'admin' | 'core';
-export type UserStatus = 'active' | 'removed';
+export type UserStatus = 'active' | 'removed' | 'alumni';
 
 export interface UserProfile {
   id: string; // = Firebase Auth uid
@@ -20,6 +20,8 @@ export interface UserProfile {
   bio?: string | null;
   responsibilities?: string | null;
   joinedAt?: Date | null;
+  /** Onboarding checklist ticks, e.g. { whatsapp: true }. */
+  onboarding?: Record<string, boolean> | null;
 }
 
 export interface Department {
@@ -87,7 +89,7 @@ export interface Activity {
   backfilled?: boolean;
 }
 
-export type ParticipationStatus = 'requested' | 'approved' | 'deferred' | 'rejected';
+export type ParticipationStatus = 'requested' | 'approved' | 'deferred' | 'rejected' | 'waitlisted';
 export type HoursStatus = 'none' | 'pending' | 'verified' | 'rejected';
 
 export interface Participation {
@@ -105,10 +107,11 @@ export interface Participation {
   reviewedAt: Date | null;
   attendance: 'present' | 'absent' | null;
   attendanceBy?: string | null;
-  hoursLogged: number | null;
+  /** Legacy (before credits replaced hours). Not used any more. */
+  hoursLogged?: number | null;
   hoursNote?: string | null;
-  hoursStatus: HoursStatus;
-  verifiedHours: number | null;
+  hoursStatus?: HoursStatus;
+  verifiedHours?: number | null;
   credits: number;
   verifiedBy?: string | null;
   verifiedAt?: Date | null;
@@ -193,7 +196,7 @@ export interface DeptRequest {
   createdAt?: Date | null;
 }
 
-export type CertKind = 'activity' | 'hours' | 'membership' | 'role';
+export type CertKind = 'activity' | 'credits' | 'membership' | 'role';
 export interface CertRequest {
   id: string;
   uid: string;
@@ -202,8 +205,8 @@ export interface CertRequest {
   /** For 'activity' certificates. */
   activityId: string | null;
   activityTitle: string | null;
-  /** The requester's verified hours when they asked (for 'hours' certificates). */
-  hoursAtRequest: number | null;
+  /** The requester's total credits when they asked, attached automatically. */
+  creditsAtRequest: number;
   /** Their position when they asked (for 'role' certificates). */
   positionTitle: string | null;
   nameOnCertificate: string;
@@ -217,7 +220,7 @@ export interface CertRequest {
 
 export const CERT_LABEL: Record<CertKind, string> = {
   activity: 'Participation in a drive or event',
-  hours: 'Volunteering hours',
+  credits: 'Credits earned',
   membership: 'Membership of ElevateX',
   role: 'Position or role held',
 };
@@ -254,6 +257,52 @@ export const PARTICIPATION_LABEL: Record<ParticipationStatus, string> = {
   approved: 'Volunteering',
   deferred: 'Deferred',
   rejected: 'Removed',
+  waitlisted: 'On the waitlist',
 };
 
 export const TASK_LABEL: Record<TaskStatus, string> = { todo: 'To do', in_progress: 'In progress', done: 'Done' };
+
+export interface ActivityStats { id: string; count: number; waitlist: string[] }
+
+export interface Photo { id: string; activityId: string; uid: string; uploaderName: string; data: string; w: number; h: number; caption: string | null; createdAt?: Date | null }
+
+export type PostAudience = 'all' | 'core' | 'department';
+export interface Announcement { id: string; title: string; body: string; audience: PostAudience; departmentId: string | null; pinned: boolean; createdBy: string; createdByName: string | null; createdAt?: Date | null }
+
+export interface Poll {
+  id: string;
+  question: string;
+  options: string[];
+  audience: 'all' | 'departments' | 'people';
+  departmentIds: string[];
+  uids: string[];
+  multi: boolean;
+  closed: boolean;
+  closesAt: Date | null;
+  createdBy: string;
+  createdByName: string | null;
+  createdAt?: Date | null;
+}
+
+export interface LibraryDoc { id: string; title: string; description: string | null; url: string; audience: PostAudience; departmentId: string | null; createdBy: string; createdByName: string | null; createdAt?: Date | null }
+
+export interface AuditEntry { id: string; action: string; actorUid: string; actorName: string | null; targetType: string | null; targetId: string | null; targetName: string | null; detail: string | null; at?: Date | null }
+
+export type ApplicationStatus = 'new' | 'reviewing' | 'interview' | 'accepted' | 'rejected' | 'added';
+export interface Application {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  school: string;
+  grade: string | null;
+  city: string | null;
+  departments: string[];
+  why: string;
+  heard: string | null;
+  availability: string | null;
+  status: ApplicationStatus;
+  hrNotes?: string | null;
+  accountUid?: string | null;
+  createdAt?: Date | null;
+}

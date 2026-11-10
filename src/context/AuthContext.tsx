@@ -11,6 +11,7 @@ type AuthState =
   | { status: 'signedOut' }
   | { status: 'noProfile'; user: User }
   | { status: 'removed'; user: User; profile: UserProfile }
+  | { status: 'alumni'; user: User; profile: UserProfile }
   | { status: 'active'; user: User; profile: UserProfile };
 
 const AuthContext = createContext<AuthState>({ status: 'loading' });
@@ -33,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         (snap) => {
           if (!snap.exists()) return setState({ status: 'noProfile', user });
           const profile = fromFirestore<UserProfile>(snap.id, snap.data());
-          setState(profile.status === 'active' ? { status: 'active', user, profile } : { status: 'removed', user, profile });
+          setState(profile.status === 'active' ? { status: 'active', user, profile } : profile.status === 'alumni' ? { status: 'alumni', user, profile } : { status: 'removed', user, profile });
         },
         () => setState({ status: 'noProfile', user }),
       );

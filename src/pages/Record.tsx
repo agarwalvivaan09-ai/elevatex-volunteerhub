@@ -6,12 +6,12 @@ import * as api from '../lib/api';
 import { DEPT } from '../lib/access';
 import type { Activity, ActivityType, UserProfile } from '../lib/types';
 import { TYPE_LABEL } from '../lib/types';
-import { fmtDate, fmtHours } from '../lib/format';
+import { fmtDate } from '../lib/format';
 import { Avatar, Empty, Field, useAction } from '../components/ui';
 
 /**
  * Chairman, Vice Chairman, CEO and COO: record drives and events that already happened,
- * with verified hours for everyone who took part. Nobody is notified.
+ * with credits for everyone who took part. Nobody is notified.
  */
 export function RecordPage() {
   const { can } = useMe();
@@ -22,23 +22,17 @@ export function RecordPage() {
       <div className="page-head">
         <div>
           <h1>Record past activity</h1>
-          <p>Add drives and events that already happened, and the hours people gave. Hours are saved as verified straight away. Nobody is notified.</p>
+          <p>Add drives and events that already happened, and give credits to everyone who took part. Nobody is notified.</p>
         </div>
       </div>
       <div className="tabs">
         <button className={tab === 'new' ? 'on' : ''} onClick={() => setTab('new')}>A past drive or event</button>
-        <button className={tab === 'hours' ? 'on' : ''} onClick={() => setTab('hours')}>Add hours to an existing one</button>
+        <button className={tab === 'hours' ? 'on' : ''} onClick={() => setTab('hours')}>Add people to an existing one</button>
       </div>
       {tab === 'new' ? <NewPast /> : <AddHours />}
     </>
   );
 }
-
-const hoursBetween = (date: string, start: string, end: string) => {
-  if (!date || !start || !end) return 0;
-  const h = (new Date(`${date}T${end}`).getTime() - new Date(`${date}T${start}`).getTime()) / 3600000;
-  return h > 0 ? Math.round(h * 4) / 4 : 0;
-};
 
 function NewPast() {
   const { profile } = useMe();
@@ -59,7 +53,7 @@ function NewPast() {
     leadUid: profile.id,
   });
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }));
-  const defaultHours = hoursBetween(f.date, f.start, f.end) || 2;
+  const defaultCredits = Math.min(20, Math.max(0, Number(f.credits) || 0));
   const [picked, setPicked] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState('');
 
@@ -72,9 +66,9 @@ function NewPast() {
     if (startAt.getTime() > Date.now()) return setError('This is for activities that already happened. For future ones, use “New drive” or “New fundraiser”.');
     if (!f.title.trim() || !f.venue.trim()) return setError('Add a title and the venue.');
     if (f.mapUrl && !/^https:\/\//i.test(f.mapUrl.trim())) return setError('The maps link must start with https://');
-    const bad = [...picked.values()].some((h) => !(h >= 0.5 && h <= 24));
-    if (bad) return setError('Every hours value must be between 0.5 and 24.');
-    const attendees = [...picked.entries()].map(([id, hours]) => ({ user: users.find((u) => u.id === id)!, hours }));
+    const bad = [...picked.values()].some((c) => !(c >= 0 && c <= 20));
+    if (bad) return setError('Credits must be between 0 and 20.');
+    const attendees = [...picked.entries()].map(([id, credits]) => ({ user: users.find((u) => u.id === id)!, credits }));
     let id = '';
     const ok = await run(async () => {
       id = await api.recordPastActivity(
@@ -103,7 +97,7 @@ function NewPast() {
         attendees,
         users,
       );
-    }, `Recorded with hours for ${attendees.length} ${attendees.length === 1 ? "person" : "people"}`);
+    }, `Recorded with credits for ${attendees.length} ${attendees.length === 1 ? "person" : "people"}`);
     if (ok) navigate(`/activities/${id}`);
   }
 
@@ -131,8 +125,8 @@ function NewPast() {
           </div>
         </section>
         <section className="card">
-          <div className="card-head"><div><h2>Who took part</h2><p>Tick everyone who was there. Hours start at the activity's length ({fmtHours(defaultHours)}); change any of them.</p></div></div>
-          <AttendeePicker users={users} picked={picked} setPicked={setPicked} defaultHours={defaultHours} />
+          <div className="card-head"><div><h2>Who took part</h2><p>Tick everyone who was there. Each gets {defaultCredits} credit{defaultCredits === 1 ? '' : 's'}; change anyone's if needed.</p></div></div>
+          <AttendeePicker users={users} picked={picked} setPicked={setPicked} defaultValue={defaultCredits} />
         </section>
       </div>
       <div className="stack">
@@ -143,8 +137,8 @@ function NewPast() {
               {users.filter((u) => u.status === 'active').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
           </Field>
-          <Field label="Credits per person" hint="0–10"><input className="input" type="number" min={0} max={10} value={f.credits} onChange={(e) => set('credits', e.target.value)} /></Field>
-          <div className="callout"><b>{picked.size}</b> {picked.size === 1 ? 'person' : 'people'} · <b>{fmtHours([...picked.values()].reduce((s, h) => s + h, 0))}</b> in total</div>
+          <Field label="Credits per person" hint="Given to everyone you tick (0–10)."><input className="input" type="number" min={0} max={10} value={f.credits} onChange={(e) => set('credits', e.target.value)} /></Field>
+          <div className="callout"><b>{picked.size}</b> {picked.size === 1 ? 'person' : 'people'} · <b>{[...picked.values()].reduce((s, c) => s + c, 0)}</b> credits in total</div>
         </section>
         {f.type === 'drive' && <p className="small muted">After saving, open the drive's <b>EDPI score</b> tab to record its plan and results.</p>}
         {error && <div className="callout bad" role="alert">{error}</div>}
@@ -160,8 +154,8 @@ function AddHours() {
   const past = activities.filter((a) => a.type !== 'meeting' && (a.status === 'completed' || a.startAt.getTime() < Date.now())).sort((x, y) => y.startAt.getTime() - x.startAt.getTime());
   const [id, setId] = useState('');
   const a: Activity | undefined = past.find((x) => x.id === id);
-  const existing = useMemo(() => participations.filter((p) => p.activityId === id && p.hoursStatus === 'verified'), [participations, id]);
-  const defaultHours = a?.endAt ? Math.max(0.5, Math.round(((a.endAt.getTime() - a.startAt.getTime()) / 3600000) * 4) / 4) : 2;
+  const existing = useMemo(() => participations.filter((p) => p.activityId === id && p.attendance === 'present'), [participations, id]);
+  const defaultCredits = a?.credits ?? 1;
   const [picked, setPicked] = useState<Map<string, number>>(new Map());
 
   return (
@@ -177,21 +171,21 @@ function AddHours() {
       {a && (
         <>
           <section className="card">
-            <div className="card-head"><div><h2>Already recorded</h2><p>{existing.length} people with verified hours. To change someone's hours, use the activity's Attendance tab.</p></div><Link className="btn btn-sm" to={`/activities/${a.id}`}>Open activity</Link></div>
-            {existing.length === 0 ? <Empty title="No verified hours yet" /> : (
-              <div className="card-body row">{existing.map((p) => <span key={p.id} className="chip">{userById.get(p.uid)?.name ?? p.userName} · {fmtHours(p.verifiedHours ?? 0)}</span>)}</div>
+            <div className="card-head"><div><h2>Already recorded</h2><p>{existing.length} people marked present. To change someone's credits, use the activity's Attendance tab.</p></div><Link className="btn btn-sm" to={`/activities/${a.id}`}>Open activity</Link></div>
+            {existing.length === 0 ? <Empty title="Nobody recorded yet" /> : (
+              <div className="card-body row">{existing.map((p) => <span key={p.id} className="chip">{userById.get(p.uid)?.name ?? p.userName} · {p.credits} cr</span>)}</div>
             )}
           </section>
           <section className="card">
-            <div className="card-head"><div><h2>Add people and hours</h2><p>Saved as verified, with {a.credits} credit{a.credits === 1 ? '' : 's'} each.</p></div></div>
-            <AttendeePicker users={users.filter((u) => !existing.some((p) => p.uid === u.id))} picked={picked} setPicked={setPicked} defaultHours={defaultHours} />
+            <div className="card-head"><div><h2>Add people</h2><p>Each is marked present with {a.credits} credit{a.credits === 1 ? '' : 's'}; change anyone's if needed.</p></div></div>
+            <AttendeePicker users={users.filter((u) => !existing.some((p) => p.uid === u.id))} picked={picked} setPicked={setPicked} defaultValue={defaultCredits} />
             <div className="card-body">
-              <button className="btn btn-primary" disabled={busy || picked.size === 0 || [...picked.values()].some((h) => !(h >= 0.5 && h <= 24))}
+              <button className="btn btn-primary" disabled={busy || picked.size === 0 || [...picked.values()].some((c) => !(c >= 0 && c <= 20))}
                 onClick={async () => {
-                  const list = [...picked.entries()].map(([uid, hours]) => ({ user: users.find((u) => u.id === uid)!, hours }));
-                  if (await run(() => api.addPastHours(a, list), `Hours added for ${list.length} ${list.length === 1 ? "person" : "people"}`)) setPicked(new Map());
+                  const list = [...picked.entries()].map(([uid, credits]) => ({ user: users.find((u) => u.id === uid)!, credits }));
+                  if (await run(() => api.addPastCredits(a, list), `Credits given to ${list.length} ${list.length === 1 ? "person" : "people"}`)) setPicked(new Map());
                 }}>
-                Save hours for {picked.size} {picked.size === 1 ? 'person' : 'people'}
+                Save credits for {picked.size} {picked.size === 1 ? 'person' : 'people'}
               </button>
             </div>
           </section>
@@ -201,8 +195,8 @@ function AddHours() {
   );
 }
 
-/** Searchable list of members with a tick box and an hours box each. */
-function AttendeePicker({ users, picked, setPicked, defaultHours }: { users: UserProfile[]; picked: Map<string, number>; setPicked: (m: Map<string, number>) => void; defaultHours: number }) {
+/** Searchable list of members with a tick box and a credits box each. */
+function AttendeePicker({ users, picked, setPicked, defaultValue }: { users: UserProfile[]; picked: Map<string, number>; setPicked: (m: Map<string, number>) => void; defaultValue: number }) {
   const { departments, departmentById } = useData();
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
@@ -213,10 +207,10 @@ function AttendeePicker({ users, picked, setPicked, defaultHours }: { users: Use
   const toggle = (u: UserProfile) => {
     const m = new Map(picked);
     if (m.has(u.id)) m.delete(u.id);
-    else m.set(u.id, defaultHours);
+    else m.set(u.id, defaultValue);
     setPicked(m);
   };
-  const setHours = (id: string, h: number) => { const m = new Map(picked); m.set(id, h); setPicked(m); };
+  const setValue = (id: string, v: number) => { const m = new Map(picked); m.set(id, v); setPicked(m); };
   const allShown = list.length > 0 && list.every((u) => picked.has(u.id));
 
   return (
@@ -230,7 +224,7 @@ function AttendeePicker({ users, picked, setPicked, defaultHours }: { users: Use
         <button type="button" className="btn btn-sm" onClick={() => {
           const m = new Map(picked);
           if (allShown) list.forEach((u) => m.delete(u.id));
-          else list.forEach((u) => { if (!m.has(u.id)) m.set(u.id, defaultHours); });
+          else list.forEach((u) => { if (!m.has(u.id)) m.set(u.id, defaultValue); });
           setPicked(m);
         }}>{allShown ? 'Untick all shown' : `Tick all shown (${list.length})`}</button>
       </div>
@@ -246,8 +240,8 @@ function AttendeePicker({ users, picked, setPicked, defaultHours }: { users: Use
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}<span className="tiny muted" style={{ display: 'block' }}>{u.departmentId ? departmentById.get(u.departmentId)?.name : '—'}</span></span>
                 </label>
                 {on && (
-                  <input className="input" style={{ width: 84 }} type="number" min={0.5} max={24} step={0.25} value={picked.get(u.id)}
-                    onChange={(e) => setHours(u.id, Number(e.target.value))} aria-label={`Hours for ${u.name}`} />
+                  <input className="input" style={{ width: 76 }} type="number" min={0} max={20} step={1} value={picked.get(u.id)}
+                    onChange={(e) => setValue(u.id, Number(e.target.value))} aria-label={`Credits for ${u.name}`} />
                 )}
               </li>
             );

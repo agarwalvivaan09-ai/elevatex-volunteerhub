@@ -1,6 +1,6 @@
 # ElevateX Volunteer Hub
 
-The internal dashboard for ElevateX volunteers. Every member signs in with their own account and sees upcoming drives, fundraisers, events and meetings. They can ask to join, see whether they were approved, log their hours and follow their verified record of contributions. Drives are scored with the **ElevateX Drive Performance Index (EDPI)**.
+The internal dashboard for ElevateX volunteers. Every member signs in with their own account and sees upcoming drives, fundraisers, events and meetings. They can volunteer in one tap, join a waitlist when a drive is full, and follow the credits they earn by attending. Drives are scored with the **ElevateX Drive Performance Index (EDPI)**.
 
 This is a separate project from the public website (`elevatex` repo / elevate-x.in). It does not touch that site.
 
@@ -14,7 +14,7 @@ Access comes from a person's **position**. The Chairman and Vice Chairman assign
 
 | | Member | Head of Dept | Board of Advisors | CEO / COO | Chairman / Vice Chairman |
 |---|:-:|:-:|:-:|:-:|:-:|
-| Own dashboard, tasks, hours, history | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Own dashboard, tasks, credits, history | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Volunteer with one click | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Propose a drive (needs core-team approval) | ✓ | ✓ | — | — | — |
 | Publish drives directly | | Drive Execution head | ✓ | ✓ | ✓ |
@@ -28,12 +28,12 @@ Access comes from a person's **position**. The Chairman and Vice Chairman assign
 | Analytics and approvals | | ✓ | ✓ | ✓ | ✓ |
 | Add or remove people, assign positions and heads | | | | | ✓ |
 
-The organiser of an activity manages its volunteer list, attendance and hours. The organiser can be any member whose drive was approved. Heads of Department can manage every activity in their own department. Nobody can verify their own hours, except Leadership.
+The organiser of an activity manages its volunteer list, attendance and credits. The organiser can be any member whose drive was approved. Heads of Department can manage every activity in their own department. Nobody can mark their own attendance or credits, except Leadership.
 
 The **core team** is the Heads of Department, the Board of Advisors, the CEO, the COO, the Chairman and the Vice Chairman.
 
 Rules that always apply:
-- **Hours and credits count only after attendance is verified.**
+- **Credits, not hours.** Everyone marked present at a drive, event or meeting gets that activity's credits automatically. Nobody can mark or credit themselves, except leadership. Hours are only entered on a drive's EDPI tab, from the sign-in sheet, because the EDPI formula needs them.
 - **Every activity needs a location.** In person means a venue plus a Google Maps link. Online means a meeting link. Members join online meetings straight from the Hub.
 - **Notifications.** Everyone is notified about a new drive or fundraiser. Proposals go to the core team. Meeting invites go only to the people invited.
 - **EDPI.** After a drive is completed, the volunteers who attended can enter its EDPI results. The plan is locked before the drive starts and can never be changed.
@@ -47,6 +47,17 @@ These permissions are enforced in [`firestore.rules`](firestore.rules) and cover
 **Departments:** Finance (CFO), Marketing (CMO), HR, Project Operations and Drive Execution.
 
 ---
+
+## Features at a glance
+
+- **Activities:** drives, fundraisers, events and meetings, with one-tap volunteering, a waitlist when a drive is full (the first person waiting is told when a spot opens), drive photos, a printable one-page drive report, and EDPI scoring.
+- **Meetings:** audiences by role and department, Join button, and attendance that gives credits.
+- **Credits:** given automatically for attendance. Members see their total on **My credits**, and it's attached automatically to certificate requests.
+- **Announcements** (with read receipts), **polls** (heads for their department; leadership for everyone, chosen departments or chosen people), and a **documents library** of Google Drive links.
+- **HR:** feedback, department change requests, certificate requests (HR makes the certificate and attaches the link), new-member onboarding progress, and inactive-member check-ins.
+- **Applications from elevate-x.in:** the website form writes straight into the Hub. HR reviews; the Chairman or Vice Chairman adds accepted people in one click.
+- **Leadership tools:** record past activities and credits (Chairman, Vice Chairman, CEO, COO), change history (who changed what), and a monthly report ready to print.
+- **Alumni:** read-only access to their own history and certificate requests.
 
 ## Setup (one time, about 15 minutes)
 
@@ -122,11 +133,16 @@ tests/                     EDPI and security-rule tests
 | `users/{uid}/private/contact` | phone, emergency contact | the member themselves, the organiser and the core team |
 | `departments`, `positions` | organisation structure | all active members |
 | `activities` | drives, fundraisers, events, meetings | all active members |
-| `participations/{activityId_uid}` | request, assignment, attendance, hours, credits | the member themselves, the organiser and the core team |
+| `participations/{activityId_uid}` | request (or waitlist), assignment, attendance, credits | the member themselves, the organiser and the core team |
 | `edpi/{activityId}` | locked plan, results, score, flags | core team, organiser, volunteers who attended |
 | `tasks` | task, assignee, due date, status | assignee, assigner, that department's head, leadership |
 | `notifications` | in-app notifications | the recipient only |
 | `feedback` | member feedback to HR | the author, the HR department, leadership |
+| `activityStats/{activityId}` | spots taken and waitlist order | all members |
+| `announcements`, `polls`, `docs` | board posts, votes, library links | the audience they're for, plus the core team |
+| `certRequests` | certificate requests with credits attached | the requester, HR, leadership |
+| `applications` | applications sent from elevate-x.in | HR and leadership |
+| `audit` | change history | leadership |
 | `meta/bootstrap` | records that the Chairman was set up | signed-in users |
 
 ### Extending it later

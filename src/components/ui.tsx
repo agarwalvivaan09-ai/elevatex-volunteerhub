@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { IconX } from './icons';
-import type { Activity, HoursStatus, Participation, ParticipationStatus } from '../lib/types';
+import type { Activity, Participation, ParticipationStatus } from '../lib/types';
 import { PARTICIPATION_LABEL, TYPE_LABEL } from '../lib/types';
 
 // ---------------------------------------------------------------- toasts
@@ -147,15 +147,15 @@ export function Loading() {
   return <div className="loading-page"><div className="spinner" aria-label="Loading" /></div>;
 }
 
-const statusTone: Record<ParticipationStatus, string> = { requested: 'warn', approved: 'ok', deferred: 'info', rejected: 'bad' };
+const statusTone: Record<ParticipationStatus, string> = { requested: 'warn', approved: 'ok', deferred: 'info', rejected: 'bad', waitlisted: 'info' };
 export function RequestBadge({ status }: { status: ParticipationStatus }) {
   return <span className={`badge ${statusTone[status]}`}>{PARTICIPATION_LABEL[status]}</span>;
 }
 
-const hoursTone: Record<HoursStatus, string> = { none: '', pending: 'warn', verified: 'ok', rejected: 'bad' };
-const hoursText: Record<HoursStatus, string> = { none: 'Not logged', pending: 'Awaiting verification', verified: 'Verified', rejected: 'Not accepted' };
-export function HoursBadge({ p }: { p: Participation }) {
-  return <span className={`badge ${hoursTone[p.hoursStatus]}`}>{hoursText[p.hoursStatus]}</span>;
+/** Credits are given automatically when someone is marked present. */
+export function CreditsBadge({ p }: { p: Participation }) {
+  if (p.attendance !== 'present') return <span className="badge">—</span>;
+  return <span className="badge ok">{p.credits} credit{p.credits === 1 ? '' : 's'}</span>;
 }
 
 export function AttendanceBadge({ p }: { p: Participation }) {

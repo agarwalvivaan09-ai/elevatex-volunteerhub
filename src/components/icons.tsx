@@ -40,3 +40,4 @@ export const IconChat = (p: P) => (<svg {...base(p)}><path d="M4 5h16v11H9l-5 4z
 export const IconBuilding = (p: P) => (<svg {...base(p)}><path d="M4 21V5l8-2v18M12 8h8v13" /><path d="M7 8h2M7 12h2M7 16h2M15 12h2M15 16h2M2.5 21h19" /></svg>);
 export const IconMail = (p: P) => (<svg {...base(p)}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3.5 6.5 12 13l8.5-6.5" /></svg>);
 export const IconMap = (p: P) => (<svg {...base(p)}><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z" /><path d="M9 4v14M15 6v14" /></svg>);
+export const IconMegaphone = (p: P) => (<svg {...base(p)}><path d="M4 10v4h3l7 4V6L7 10z" /><path d="M17.5 9a4 4 0 0 1 0 6" /><path d="M7 14l1 5h2.5l-1-5" /></svg>);

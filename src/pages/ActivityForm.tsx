@@ -124,7 +124,7 @@ export function ActivityFormPage() {
       capacity: !isMeeting && f.capacity ? Math.max(1, parseInt(f.capacity, 10)) : null,
       leadUid: f.leadUid || profile.id,
       departmentId: departmentFor(),
-      credits: isMeeting ? 0 : Math.min(10, Math.max(0, Number(f.credits) || 0)),
+      credits: Math.min(10, Math.max(0, Number(f.credits) || 0)),
       openForRequests: isMeeting ? false : f.openForRequests,
     };
     const volunteerUids = new Set(participations.filter((p) => p.activityId === input.relatedActivityId && p.status === 'approved').map((p) => p.uid));
@@ -272,11 +272,16 @@ export function ActivityFormPage() {
                 )}
               </>
             )}
-            <Field label={isMeeting ? 'Host' : 'Organiser'} hint={isMeeting ? undefined : 'Sees the volunteer list, records attendance and verifies hours.'}>
+            <Field label={isMeeting ? 'Host' : 'Organiser'} hint={isMeeting ? 'Takes attendance after the meeting.' : 'Sees the volunteer list and takes attendance.'}>
               <select className="select" value={f.leadUid} onChange={(e) => set('leadUid', e.target.value)}>
                 {users.filter((u) => u.status === 'active').map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === profile.id ? ' (you)' : ''}</option>)}
               </select>
             </Field>
+            {isMeeting && (
+              <Field label="Credits for attending" hint="Everyone the host marks present gets these automatically (0–10).">
+                <input className="input" type="number" min={0} max={10} step={1} value={f.credits} onChange={(e) => set('credits', e.target.value)} />
+              </Field>
+            )}
             {f.type === 'event' && (
               <Field label="Department (optional)">
                 <select className="select" value={f.departmentId} onChange={(e) => set('departmentId', e.target.value)}>
@@ -290,7 +295,7 @@ export function ActivityFormPage() {
                 <Field label="Volunteer spots (optional)">
                   <input className="input" type="number" min={1} value={f.capacity} onChange={(e) => set('capacity', e.target.value)} placeholder="No limit" />
                 </Field>
-                <Field label="Participation credits" hint="Each volunteer earns these once attendance and hours are verified (0–10).">
+                <Field label="Credits for attending" hint="Everyone marked present gets these automatically (0–10).">
                   <input className="input" type="number" min={0} max={10} step={1} value={f.credits} onChange={(e) => set('credits', e.target.value)} />
                 </Field>
                 <label className="check">

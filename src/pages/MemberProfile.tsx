@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useMe } from '../context/AuthContext';
 import { summarise, useData } from '../context/DataContext';
 import * as api from '../lib/api';
-import { fmtDate, fmtHours } from '../lib/format';
+import { fmtDate } from '../lib/format';
 import { Avatar, Empty } from '../components/ui';
 import { IconChevronLeft } from '../components/icons';
 import { ContributionTable } from './Contributions';
@@ -57,9 +57,9 @@ export function MemberProfilePage() {
 
       {canSeeDetails && (
         <div className="stats">
-          <div className="card stat"><div className="label">Verified hours</div><div className="value">{fmtHours(s.verifiedHours)}</div></div>
           <div className="card stat"><div className="label">Credits</div><div className="value">{s.credits}</div></div>
-          <div className="card stat"><div className="label">Attended</div><div className="value">{s.attended}</div></div>
+          <div className="card stat"><div className="label">Drives attended</div><div className="value">{s.attended}</div></div>
+          <div className="card stat"><div className="label">Meetings attended</div><div className="value">{s.meetings}</div></div>
           <div className="card stat"><div className="label">Upcoming</div><div className="value">{s.upcomingAssignments}</div></div>
         </div>
       )}

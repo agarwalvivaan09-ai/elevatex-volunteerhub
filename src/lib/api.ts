@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth, createAuthAccount, db } from './firebase';
-import type { Activity, CertKind, CertRequest, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
+import type { Activity, Announcement, Application, ApplicationStatus, CertKind, CertRequest, LibraryDoc, Photo, Poll, PostAudience, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Role, Task, TaskStatus, UserProfile } from './types';
 import { TYPE_LABEL } from './types';
 import { computeEdpi, EDPI_SETTINGS } from './edpi';
 import { DEPARTMENTS, LEGACY_DEPARTMENTS, LEGACY_POSITIONS, POSITIONS } from './structure';
@@ -156,6 +156,7 @@ export async function addMember(input: MemberInput) {
     if (code === 'auth/invalid-email') throw new Error('That email address is not valid.');
     throw e;
   }
+  await audit('member.added', { type: 'user', id: newUid, name: input.name.trim() }, `${email} as ${input.positionId}`);
   await setDoc(doc(db, 'users', newUid), {
     name: input.name.trim(),
     email,
@@ -180,8 +181,13 @@ export async function addMember(input: MemberInput) {
 
 export const sendInvite = (email: string) => sendPasswordResetEmail(auth, email);
 
-export async function updateMember(memberUid: string, patch: Partial<Pick<UserProfile, 'role' | 'positionId' | 'departmentId' | 'title' | 'status' | 'responsibilities' | 'name'>>) {
+export async function updateMember(memberUid: string, patch: Partial<Pick<UserProfile, 'role' | 'positionId' | 'departmentId' | 'title' | 'status' | 'responsibilities' | 'name'>>, before?: UserProfile) {
   await updateDoc(doc(db, 'users', memberUid), { ...patch, updatedAt: serverTimestamp() });
+  const changes = (Object.keys(patch) as (keyof typeof patch)[])
+    .filter((k) => !before || before[k] !== patch[k])
+    .filter((k) => k !== 'responsibilities')
+    .map((k) => `${k}: ${before ? String(before[k] ?? '—') + ' → ' : ''}${String(patch[k] ?? '—')}`);
+  if (changes.length) await audit(patch.status ? `member.${patch.status}` : 'member.updated', { type: 'user', id: memberUid, name: before?.name ?? patch.name ?? null }, changes.join(', '));
 }
 
 export async function updateOwnProfile(patch: { name: string; bio: string | null }) {
@@ -261,6 +267,7 @@ export async function reviewProposal(a: Activity, decision: 'upcoming' | 'declin
     if (snap.data()?.status !== 'proposed') throw new Error('Someone on the core team has already reviewed this proposal.');
     tx.update(ref, { status: decision, reviewedBy: uid(), reviewNote: note.trim() || null, reviewedAt: serverTimestamp(), updatedAt: serverTimestamp() });
   });
+  await audit(decision === 'upcoming' ? 'drive.approved' : 'drive.declined', { type: 'activity', id: a.id, name: a.title }, note || undefined);
   const link = `/activities/${a.id}`;
   if (decision === 'upcoming') {
     await notifySafe([a.createdBy], { kind: 'proposal', title: `Your drive was approved: ${a.title}`, body: note || 'It is now live and members can volunteer.', link });
@@ -285,120 +292,237 @@ export async function deleteActivity(id: string) {
   }
   batch.delete(doc(db, 'activities', id));
   await batch.commit();
+  await audit('activity.deleted', { type: 'activity', id });
   await deleteDoc(doc(db, 'edpi', id)).catch(() => {});
 }
 
-// ---------------------------------------------------------------- volunteering
-const pid = (activityId: string, memberUid: string) => `${activityId}_${memberUid}`;
+// ---------------------------------------------------------------- change history
+/** Append-only record of important changes (read by Leadership on the Change history page). */
+export async function audit(action: string, target: { type?: string; id?: string; name?: string | null } = {}, detail?: string) {
+  const u = auth.currentUser;
+  if (!u) return;
+  await addDoc(collection(db, 'audit'), {
+    action,
+    actorUid: u.uid,
+    actorName: actorName,
+    targetType: target.type ?? null,
+    targetId: target.id ?? null,
+    targetName: target.name ?? null,
+    detail: detail?.slice(0, 500) ?? null,
+    at: serverTimestamp(),
+  }).catch((e) => console.warn('audit failed', e));
+}
+let actorName: string | null = null;
+/** Called once the signed-in profile is known, so history entries carry a readable name. */
+export const setActorName = (name: string) => { actorName = name; };
 
-const blankParticipation = {
+// ---------------------------------------------------------------- volunteering, waitlist, attendance & credits
+const pid = (activityId: string, memberUid: string) => `${activityId}_${memberUid}`;
+const statsRef = (activityId: string) => doc(db, 'activityStats', activityId);
+
+const freshParticipation = {
+  note: null,
+  assignment: null,
+  reviewNote: null,
+  reviewedBy: null,
+  reviewedAt: null,
   attendance: null,
   attendanceBy: null,
-  hoursLogged: null,
-  hoursNote: null,
-  hoursStatus: 'none',
-  verifiedHours: null,
   credits: 0,
-  verifiedBy: null,
-  verifiedAt: null,
 };
 
-export async function volunteer(a: Activity, note: string, myName: string) {
+/**
+ * Volunteer with one tap. If the activity is full you join the waitlist instead.
+ * The shared counter is updated in the same write (the rules check it).
+ */
+export async function volunteer(a: Activity, note: string, myName: string): Promise<'approved' | 'waitlisted'> {
   const me = uid();
-  await setDoc(doc(db, 'participations', pid(a.id, me)), {
-    activityId: a.id,
-    uid: me,
-    userName: myName,
-    status: 'approved',
-    source: 'volunteer',
-    note: note.trim() || null,
-    assignment: null,
-    reviewNote: null,
-    reviewedBy: null,
-    reviewedAt: null,
-    ...blankParticipation,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  return runTransaction(db, async (tx) => {
+    const st = await tx.get(statsRef(a.id));
+    const count = st.exists() ? (st.data().count as number) : 0;
+    const waitlist = st.exists() ? ((st.data().waitlist as string[]) ?? []) : [];
+    const full = a.capacity != null && count >= a.capacity;
+    const status = full ? 'waitlisted' : 'approved';
+    tx.set(doc(db, 'participations', pid(a.id, me)), {
+      activityId: a.id, uid: me, userName: myName, status, source: 'volunteer',
+      ...freshParticipation, note: note.trim() || null,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    tx.set(statsRef(a.id), full ? { count, waitlist: [...waitlist, me] } : { count: count + 1, waitlist });
+    return status;
+  }).then(async (status) => {
+    if (status === 'approved')
+      await notifySafe([a.leadUid ?? a.createdBy], { kind: 'volunteer', title: `New volunteer for ${a.title}`, body: myName, link: `/activities/${a.id}` });
+    return status;
   });
-  const organiser = a.leadUid ?? a.createdBy;
-  await notifySafe([organiser], { kind: 'volunteer', title: `New volunteer for ${a.title}`, body: myName, link: `/activities/${a.id}` });
 }
 
-export const withdraw = (p: Participation) => deleteDoc(doc(db, 'participations', p.id));
-
-export async function addVolunteer(a: Activity, member: UserProfile, assignment: string) {
-  const memberUid = member.id;
-  await setDoc(doc(db, 'participations', pid(a.id, memberUid)), {
-    activityId: a.id,
-    uid: memberUid,
-    userName: member.name,
-    status: 'approved',
-    source: 'assigned',
-    note: null,
-    assignment: assignment.trim() || null,
-    reviewNote: null,
-    reviewedBy: uid(),
-    reviewedAt: serverTimestamp(),
-    ...blankParticipation,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+/** Leave an activity (or its waitlist). If a spot frees up, the first person waiting is told they can take it. */
+export async function withdraw(p: Participation, a: Activity) {
+  const me = uid();
+  let next: string | undefined;
+  await runTransaction(db, async (tx) => {
+    const st = await tx.get(statsRef(a.id));
+    const count = st.exists() ? (st.data().count as number) : 0;
+    const waitlist = st.exists() ? ((st.data().waitlist as string[]) ?? []) : [];
+    tx.delete(doc(db, 'participations', p.id));
+    if (p.status === 'waitlisted') tx.set(statsRef(a.id), { count, waitlist: waitlist.filter((x) => x !== me) });
+    else {
+      tx.set(statsRef(a.id), { count: Math.max(0, count - 1), waitlist });
+      next = waitlist[0];
+    }
   });
-  await notifySafe([memberUid], { kind: 'volunteer', title: `You've been added to ${a.title}`, body: assignment ? `Your role: ${assignment}` : fmtDateTime(a.startAt), link: `/activities/${a.id}` });
+  if (next) await notifySafe([next], { kind: 'volunteer', title: `A spot opened up: ${a.title}`, body: 'You were first on the waitlist. Tap to take the spot before someone else does.', link: `/activities/${a.id}` });
+}
+
+/** A waitlisted volunteer takes a freed spot. */
+export async function claimSpot(p: Participation, a: Activity) {
+  const me = uid();
+  await runTransaction(db, async (tx) => {
+    const st = await tx.get(statsRef(a.id));
+    const count = st.exists() ? (st.data().count as number) : 0;
+    const waitlist = st.exists() ? ((st.data().waitlist as string[]) ?? []) : [];
+    if (a.capacity != null && count >= a.capacity) throw new Error('Sorry, the spot has already been taken. You are still on the waitlist.');
+    tx.update(doc(db, 'participations', p.id), { status: 'approved', updatedAt: serverTimestamp() });
+    tx.set(statsRef(a.id), { count: count + 1, waitlist: waitlist.filter((x) => x !== me) });
+  });
+}
+
+/** Organisers: rewrite the counter from the real list (used after any organiser change). */
+export async function syncStats(a: Activity, parts: Participation[]) {
+  const approved = parts.filter((x) => x.status === 'approved').length;
+  const waitlist = parts.filter((x) => x.status === 'waitlisted').sort((x, y) => (x.createdAt?.getTime() ?? 0) - (y.createdAt?.getTime() ?? 0)).map((x) => x.uid);
+  await setDoc(statsRef(a.id), { count: approved, waitlist });
+}
+
+export async function addVolunteer(a: Activity, member: UserProfile, assignment: string, parts: Participation[]) {
+  const rec = {
+    activityId: a.id, uid: member.id, userName: member.name, status: 'approved', source: 'assigned',
+    ...freshParticipation, assignment: assignment.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp(),
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, 'participations', pid(a.id, member.id)), rec);
+  await syncStats(a, [...parts.filter((x) => x.uid !== member.id), { ...(rec as unknown as Participation), status: 'approved' }]);
+  await notifySafe([member.id], { kind: 'volunteer', title: `You've been added to ${a.title}`, body: assignment ? `Your role: ${assignment}` : fmtDateTime(a.startAt), link: `/activities/${a.id}` });
 }
 
 export async function setAssignment(p: Participation, assignment: string) {
   await updateDoc(doc(db, 'participations', p.id), { assignment: assignment.trim() || null, updatedAt: serverTimestamp() });
 }
 
-export async function removeVolunteer(p: Participation, a: Activity, reason: string) {
-  await updateDoc(doc(db, 'participations', p.id), { status: 'rejected', reviewNote: reason.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp(), ...blankParticipation, updatedAt: serverTimestamp() });
+export async function removeVolunteer(p: Participation, a: Activity, reason: string, parts: Participation[]) {
+  await updateDoc(doc(db, 'participations', p.id), { status: 'rejected', reviewNote: reason.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp(), attendance: null, credits: 0, updatedAt: serverTimestamp() });
+  await syncStats(a, parts.map((x) => (x.id === p.id ? { ...x, status: 'rejected' as const } : x)));
   await notifySafe([p.uid], { kind: 'volunteer', title: `You were removed from ${a.title}`, body: reason || undefined, link: `/activities/${a.id}` });
+  if (p.credits) await audit('credits.removed', { type: 'participation', id: p.id, name: p.userName ?? null }, `${a.title}: ${p.credits} credits removed`);
 }
 
-export async function restoreVolunteer(p: Participation) {
+/** Organisers move someone up from the waitlist (or put a removed volunteer back). */
+export async function approveVolunteer(p: Participation, a: Activity, parts: Participation[]) {
   await updateDoc(doc(db, 'participations', p.id), { status: 'approved', reviewNote: null, updatedAt: serverTimestamp() });
+  await syncStats(a, parts.map((x) => (x.id === p.id ? { ...x, status: 'approved' as const } : x)));
+  await notifySafe([p.uid], { kind: 'volunteer', title: `You're in: ${a.title}`, body: fmtDateTime(a.startAt), link: `/activities/${a.id}` });
 }
 
-export async function markAttendance(p: Participation, attendance: 'present' | 'absent' | null) {
-  const patch: DocumentData = { attendance, attendanceBy: uid(), attendanceAt: serverTimestamp(), updatedAt: serverTimestamp() };
-  if (attendance !== 'present') {
-    Object.assign(patch, { hoursStatus: p.hoursStatus === 'none' ? 'none' : 'rejected', verifiedHours: null, credits: 0, verifiedBy: null, verifiedAt: null });
-  }
-  await updateDoc(doc(db, 'participations', p.id), patch);
+/** Marking someone present gives them the activity's credits automatically; absent takes them away. */
+export async function setAttendance(p: Participation, a: Activity, attendance: 'present' | 'absent' | null) {
+  const credits = attendance === 'present' ? a.credits : 0;
+  await updateDoc(doc(db, 'participations', p.id), { attendance, credits, attendanceBy: uid(), attendanceAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  if (credits !== p.credits) await audit(attendance === 'present' ? 'credits.given' : 'credits.removed', { type: 'participation', id: p.id, name: p.userName ?? null }, `${a.title}: ${p.credits} → ${credits} credits`);
 }
 
-export async function logHours(p: Participation, hours: number, note: string) {
-  await updateDoc(doc(db, 'participations', p.id), {
-    hoursLogged: hours,
-    hoursNote: note.trim() || null,
-    hoursStatus: 'pending',
-    hoursSubmittedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+/** Change one person's credits for an activity (must be marked present). */
+export async function setCredits(p: Participation, a: Activity, credits: number) {
+  await updateDoc(doc(db, 'participations', p.id), { credits, updatedAt: serverTimestamp() });
+  await audit('credits.changed', { type: 'participation', id: p.id, name: p.userName ?? null }, `${a.title}: ${p.credits} → ${credits} credits`);
+}
+
+/** Meetings: mark an invitee present/absent; creates their record the first time. */
+export async function markMeetingAttendance(a: Activity, member: UserProfile, existing: Participation | undefined, attendance: 'present' | 'absent') {
+  if (existing) return setAttendance(existing, a, attendance);
+  const credits = attendance === 'present' ? a.credits : 0;
+  await setDoc(doc(db, 'participations', pid(a.id, member.id)), {
+    activityId: a.id, uid: member.id, userName: member.name, status: 'approved', source: 'assigned',
+    ...freshParticipation, attendance, credits, attendanceBy: uid(), reviewedBy: uid(), reviewedAt: serverTimestamp(),
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  if (credits) await audit('credits.given', { type: 'participation', id: pid(a.id, member.id), name: member.name }, `${a.title}: ${credits} credits`);
+}
+
+// ---------------------------------------------------------------- drive photos
+export async function addPhoto(activityId: string, img: { data: string; w: number; h: number }, myName: string) {
+  await addDoc(collection(db, 'photos'), { activityId, uid: uid(), uploaderName: myName, data: img.data, w: img.w, h: img.h, caption: null, createdAt: serverTimestamp() });
+}
+export const deletePhoto = (p: Photo) => deleteDoc(doc(db, 'photos', p.id));
+
+// ---------------------------------------------------------------- announcements
+export function audienceUids(users: UserProfile[], audience: PostAudience, departmentId: string | null) {
+  const active = users.filter((u) => u.status === 'active');
+  if (audience === 'all') return active.map((u) => u.id);
+  if (audience === 'core') return active.filter((u) => isCoreRole(u.role)).map((u) => u.id);
+  return active.filter((u) => u.departmentId === departmentId).map((u) => u.id);
+}
+
+export async function postAnnouncement(x: { title: string; body: string; audience: PostAudience; departmentId: string | null; pinned: boolean }, users: UserProfile[]) {
+  const ref = await addDoc(collection(db, 'announcements'), { ...x, title: x.title.trim(), body: x.body.trim(), createdBy: uid(), createdByName: actorName, createdAt: serverTimestamp() });
+  const n = await notifySafe(audienceUids(users, x.audience, x.departmentId), { kind: 'announcement', title: x.title.trim(), body: x.body.trim().slice(0, 140), link: '/announcements' });
+  return { id: ref.id, notified: n };
+}
+export const updateAnnouncement = (a: Announcement, patch: Partial<Pick<Announcement, 'pinned' | 'title' | 'body'>>) => updateDoc(doc(db, 'announcements', a.id), patch);
+export const deleteAnnouncement = (a: Announcement) => deleteDoc(doc(db, 'announcements', a.id));
+/** Read receipt (written once per person). */
+export const markAnnouncementRead = (a: Announcement) => setDoc(doc(db, 'announcements', a.id, 'reads', uid()), { at: serverTimestamp(), name: actorName });
+export async function announcementReaders(a: Announcement) {
+  const snap = await getDocs(collection(db, 'announcements', a.id, 'reads'));
+  return snap.docs.map((d) => ({ uid: d.id, name: (d.data().name as string) ?? null }));
+}
+
+// ---------------------------------------------------------------- polls
+export async function createPoll(x: Omit<Poll, 'id' | 'createdBy' | 'createdByName' | 'createdAt' | 'closed'>, users: UserProfile[]) {
+  await addDoc(collection(db, 'polls'), {
+    ...x,
+    question: x.question.trim(),
+    options: x.options.map((o) => o.trim()).filter(Boolean),
+    closesAt: x.closesAt ? Timestamp.fromDate(x.closesAt) : null,
+    closed: false,
+    createdBy: uid(),
+    createdByName: actorName,
+    createdAt: serverTimestamp(),
+  });
+  const targets = x.audience === 'all' ? audienceUids(users, 'all', null)
+    : x.audience === 'people' ? x.uids
+    : users.filter((u) => u.status === 'active' && u.departmentId && x.departmentIds.includes(u.departmentId)).map((u) => u.id);
+  return notifySafe(targets, { kind: 'poll', title: `New poll: ${x.question.trim()}`, body: x.closesAt ? `Closes ${fmtDateTime(x.closesAt)}` : undefined, link: '/polls' });
+}
+export const closePoll = (p: Poll) => updateDoc(doc(db, 'polls', p.id), { closed: true });
+export const deletePoll = (p: Poll) => deleteDoc(doc(db, 'polls', p.id));
+export const vote = (p: Poll, choices: number[]) => setDoc(doc(db, 'polls', p.id, 'votes', uid()), { choices, name: actorName, at: serverTimestamp() });
+export const unvote = (p: Poll) => deleteDoc(doc(db, 'polls', p.id, 'votes', uid()));
+
+// ---------------------------------------------------------------- documents library
+export async function addLibraryDoc(x: { title: string; url: string; description: string; audience: PostAudience; departmentId: string | null }) {
+  await addDoc(collection(db, 'docs'), { ...x, title: x.title.trim(), url: x.url.trim(), description: x.description.trim() || null, createdBy: uid(), createdByName: actorName, createdAt: serverTimestamp() });
+}
+export const deleteLibraryDoc = (d: LibraryDoc) => deleteDoc(doc(db, 'docs', d.id));
+
+// ---------------------------------------------------------------- applications from the website
+export async function setApplicationStatus(a: Application, status: ApplicationStatus, hrNotes?: string) {
+  await updateDoc(doc(db, 'applications', a.id), {
+    status,
+    ...(hrNotes !== undefined ? { hrNotes: hrNotes.trim() || null } : {}),
+    reviewedBy: uid(),
+    reviewedAt: serverTimestamp(),
   });
 }
-
-export async function verifyHours(p: Participation, hours: number, credits: number) {
-  await updateDoc(doc(db, 'participations', p.id), {
-    hoursLogged: p.hoursLogged ?? hours,
-    hoursStatus: 'verified',
-    verifiedHours: hours,
-    credits,
-    verifiedBy: uid(),
-    verifiedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+export async function markApplicationAdded(a: Application, accountUid: string) {
+  await updateDoc(doc(db, 'applications', a.id), { status: 'added', accountUid, reviewedBy: uid(), reviewedAt: serverTimestamp() });
+  await audit('application.added', { type: 'user', id: accountUid, name: a.name }, a.email);
 }
 
-export async function rejectHours(p: Participation) {
-  await updateDoc(doc(db, 'participations', p.id), {
-    hoursStatus: 'rejected',
-    verifiedHours: null,
-    credits: 0,
-    verifiedBy: uid(),
-    verifiedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-}
+// ---------------------------------------------------------------- onboarding & check-ins
+export const setOnboarding = (onboarding: Record<string, boolean>) => updateDoc(doc(db, 'users', uid()), { onboarding, updatedAt: serverTimestamp() });
+export const sendCheckIn = (uids: string[], message: string) =>
+  notify(uids, { kind: 'feedback', title: 'HR is checking in', body: message || "We haven't seen you at a drive or meeting for a while. Is everything okay? Reply from HR → Give feedback.", link: '/hr?tab=feedback' });
 
 // ---------------------------------------------------------------- tasks
 export async function createTask(t: { title: string; description: string; assigneeUid: string; departmentId: string | null; dueAt: Date | null }) {
@@ -488,45 +612,29 @@ export async function decideDeptRequest(r: DeptRequest, status: 'approved' | 'de
   batch.update(doc(db, 'deptRequests', r.id), { status, hrNote: hrNote.trim() || null, reviewedBy: uid(), reviewedAt: serverTimestamp() });
   if (status === 'approved') batch.update(doc(db, 'users', r.uid), { departmentId: r.toDept, updatedAt: serverTimestamp() });
   await batch.commit();
+  if (status !== 'pending') await audit(`department.${status}`, { type: 'user', id: r.uid, name: r.userName }, `${r.fromDept ?? 'none'} → ${r.toDept}`);
   if (status !== 'pending')
     await notifySafe([r.uid], { kind: 'feedback', title: status === 'approved' ? 'Your department change was approved' : 'Your department change request was declined', body: hrNote || undefined, link: '/hr' });
 }
 
 // ---------------------------------------------------------------- past records (Chairman, Vice Chairman, CEO, COO)
-export interface PastAttendee { user: UserProfile; hours: number }
+export interface PastAttendee { user: UserProfile; credits: number }
 
-/** Writes verified attendance + hours for each attendee. Nobody is notified. */
-async function writeVerifiedHours(activityId: string, credits: number, attendees: PastAttendee[]) {
+/** Marks each attendee present with their credits. Nobody is notified. */
+async function writeCredits(a: { id: string; title: string }, attendees: PastAttendee[]) {
   const me = uid();
   for (let i = 0; i < attendees.length; i += 400) {
     const batch = writeBatch(db);
-    for (const { user, hours } of attendees.slice(i, i + 400)) {
-      batch.set(doc(db, 'participations', pid(activityId, user.id)), {
-        activityId,
-        uid: user.id,
-        userName: user.name,
-        status: 'approved',
-        source: 'assigned',
-        note: null,
-        assignment: null,
-        reviewNote: null,
-        reviewedBy: me,
-        reviewedAt: serverTimestamp(),
-        attendance: 'present',
-        attendanceBy: me,
-        hoursLogged: hours,
-        hoursNote: 'Recorded after the event',
-        hoursStatus: 'verified',
-        verifiedHours: hours,
-        credits,
-        verifiedBy: me,
-        verifiedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+    for (const { user, credits } of attendees.slice(i, i + 400)) {
+      batch.set(doc(db, 'participations', pid(a.id, user.id)), {
+        activityId: a.id, uid: user.id, userName: user.name, status: 'approved', source: 'assigned',
+        ...freshParticipation, attendance: 'present', credits, attendanceBy: me, reviewedBy: me, reviewedAt: serverTimestamp(),
+        note: 'Recorded after the event', createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       });
     }
     await batch.commit();
   }
+  await audit('past.credits', { type: 'activity', id: a.id, name: a.title }, `${attendees.length} people, ${attendees.reduce((s, x) => s + x.credits, 0)} credits in total`);
 }
 
 export async function recordPastActivity(input: ActivityInput, attendees: PastAttendee[], users: UserProfile[]): Promise<string> {
@@ -545,15 +653,16 @@ export async function recordPastActivity(input: ActivityInput, attendees: PastAt
     reviewedBy: null,
     reviewNote: null,
   });
-  await writeVerifiedHours(ref.id, input.credits, attendees);
+  await audit('past.activity', { type: 'activity', id: ref.id, name: input.title }, `Recorded a past ${input.type} on ${input.startAt.toDateString()}`);
+  await writeCredits({ id: ref.id, title: input.title }, attendees);
   return ref.id;
 }
 
-export const addPastHours = (a: Activity, attendees: PastAttendee[]) => writeVerifiedHours(a.id, a.credits, attendees);
+export const addPastCredits = (a: Activity, attendees: PastAttendee[]) => writeCredits(a, attendees);
 
 // ---------------------------------------------------------------- certificate requests (to HR)
 export async function requestCertificate(
-  r: { userName: string; kind: CertKind; activityId: string | null; activityTitle: string | null; hoursAtRequest: number | null; positionTitle: string | null; nameOnCertificate: string; note: string },
+  r: { userName: string; kind: CertKind; activityId: string | null; activityTitle: string | null; creditsAtRequest: number; positionTitle: string | null; nameOnCertificate: string; note: string },
   hrUids: string[],
 ) {
   await addDoc(collection(db, 'certRequests'), {
@@ -581,6 +690,7 @@ export async function decideCertificate(r: CertRequest, patch: { status: CertReq
     reviewedBy: uid(),
     reviewedAt: serverTimestamp(),
   });
+  if (patch.status !== r.status) await audit(`certificate.${patch.status}`, { type: 'certificate', id: r.id, name: r.userName }, patch.certificateId || undefined);
   if (patch.status !== 'pending' && patch.status !== r.status)
     await notifySafe([r.uid], {
       kind: 'feedback',
@@ -603,15 +713,16 @@ export async function saveEdpiPlan(activityId: string, plan: EdpiRecord['plan'],
 }
 
 export async function lockEdpiPlan(activityId: string) {
+  void audit('edpi.locked', { type: 'activity', id: activityId });
   await updateDoc(doc(db, 'edpi', activityId), { locked: true, lockedAt: serverTimestamp(), lockedBy: uid(), updatedAt: serverTimestamp() });
 }
 
 export async function saveEdpiResults(
   record: EdpiRecord,
   input: { spent: number; peopleHelped: number; impactDone: number; extraHours: number[] },
-  verifiedHours: number[],
+  memberHours: number[],
 ) {
-  const hoursEach = [...verifiedHours, ...input.extraHours];
+  const hoursEach = [...memberHours, ...input.extraHours];
   const outcome = computeEdpi(record.plan, { spent: input.spent, peopleHelped: input.peopleHelped, impactDone: input.impactDone, hoursEach });
   if (!outcome.score) throw new Error(outcome.rejections.join(' '));
   await updateDoc(doc(db, 'edpi', record.id), {

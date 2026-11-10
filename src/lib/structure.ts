@@ -20,7 +20,7 @@ export const POSITIONS: Position[] = [
   { id: 'head-hr', title: 'Head of HR', role: 'hod', departmentId: 'hr', order: 7, responsibilities: ['Heads the HR department', 'Reviews member feedback and satisfaction', 'Leads recruitment of new members'] },
   { id: 'head-project-operations', title: 'Head of Project Operations', role: 'hod', departmentId: 'project-operations', order: 8, responsibilities: ['Heads Project Operations', 'Creates and runs fundraisers', 'Assigns tasks to Project Operations members'] },
   { id: 'head-drive-execution', title: 'Head of Drive Execution', role: 'hod', departmentId: 'drive-execution', order: 9, responsibilities: ['Heads Drive Execution', 'Creates drives and drive meetings', 'Assigns tasks to Drive Execution members'] },
-  { id: 'member', title: 'Member', role: 'member', departmentId: null, order: 10, responsibilities: ['Volunteer in drives and fundraisers', 'Complete tasks from your department head', 'Log your hours honestly'] },
+  { id: 'member', title: 'Member', role: 'member', departmentId: null, order: 10, responsibilities: ['Volunteer in drives and fundraisers', 'Complete tasks from your department head', 'Turn up when you sign up'] },
 ];
 
 /** Maximum Heads per department. */

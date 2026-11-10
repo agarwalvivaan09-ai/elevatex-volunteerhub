@@ -2,16 +2,20 @@ import { Link } from 'react-router-dom';
 import { useMe } from '../context/AuthContext';
 import { summarise, useData } from '../context/DataContext';
 import { canSeeActivity, normRole } from '../lib/access';
-import { fmtHours, fmtShort, relativeDay } from '../lib/format';
+import { pollIsOpen } from './Polls';
+import { ONBOARDING, onboardingState } from '../lib/onboarding';
+import * as api from '../lib/api';
+import { useAction } from '../components/ui';
+import { fmtShort, relativeDay } from '../lib/format';
 import { TASK_LABEL } from '../lib/types';
 import { ActivityRow, WhereCard } from '../components/activity';
 import { PersonCard, displayTitle } from '../components/people';
-import { Avatar, Empty, HoursBadge, RequestBadge } from '../components/ui';
+import { Avatar, CreditsBadge, Empty, RequestBadge } from '../components/ui';
 import { IconCalendar, IconInbox, IconPlus, IconTask, IconVideo } from '../components/icons';
 
 export function DashboardPage() {
   const { profile, can } = useMe();
-  const { activities, participations, positionById, departmentById, activityById, tasks, notifications, users } = useData();
+  const { activities, participations, positionById, departmentById, activityById, tasks, notifications, users, announcements, polls } = useData();
   // Point of contact: your department head(s); otherwise HR head; otherwise the Chairman / Vice Chairman.
   const others = users.filter((u) => u.status === 'active' && u.id !== profile.id);
   const contacts = (() => {
@@ -36,7 +40,6 @@ export function DashboardPage() {
   const meetings = upcoming.filter((a) => a.type === 'meeting');
   const nextMeeting = meetings[0];
   const myTasks = tasks.filter((t) => t.assigneeUid === profile.id && t.status !== 'done');
-  const needsHours = mine.filter((p) => p.attendance === 'present' && (p.hoursStatus === 'none' || p.hoursStatus === 'rejected'));
   const history = mine
     .filter((p) => p.attendance === 'present')
     .map((p) => ({ p, a: activityById.get(p.activityId) }))
@@ -69,10 +72,19 @@ export function DashboardPage() {
         </div>
       </section>
 
+      {announcements.filter((x) => x.pinned).slice(0, 2).map((x) => (
+        <Link key={x.id} to="/announcements" className="card card-pad pinned-ann" style={{ textDecoration: 'none', color: 'inherit', marginBottom: 14 }}>
+          <span className="badge brand">Pinned</span>
+          <div style={{ minWidth: 0 }}><b>{x.title}</b><p className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.body}</p></div>
+        </Link>
+      ))}
+
+      <Onboarding />
+
       <div className="stats">
-        <div className="card stat"><div className="label">Verified hours</div><div className="value">{fmtHours(stats.verifiedHours)}</div><div className="hint">Confirmed after attendance</div></div>
-        <div className="card stat"><div className="label">Participation credits</div><div className="value">{stats.credits}</div></div>
+        <div className="card stat"><div className="label">Credits</div><div className="value">{stats.credits}</div><div className="hint">From drives, events and meetings</div></div>
         <div className="card stat"><div className="label">Drives attended</div><div className="value">{stats.attended}</div></div>
+        <div className="card stat"><div className="label">Meetings attended</div><div className="value">{stats.meetings}</div></div>
         <div className="card stat"><div className="label">Open tasks</div><div className="value">{myTasks.length}</div><div className="hint">{stats.upcomingAssignments} upcoming volunteering</div></div>
       </div>
 
@@ -83,12 +95,6 @@ export function DashboardPage() {
         </Link>
       )}
 
-      {needsHours.length > 0 && (
-        <div className="callout warn" style={{ marginBottom: 20 }}>
-          <b>Log your hours:</b> you were marked present at{' '}
-          {needsHours.map((p, i) => <span key={p.id}>{i > 0 && ', '}<Link to={`/activities/${p.activityId}`}>{activityById.get(p.activityId)?.title}</Link></span>)}.
-        </div>
-      )}
 
       <div className="layout-main-side">
         <div className="stack">
@@ -120,7 +126,7 @@ export function DashboardPage() {
             <div className="card-head"><div><h2>Contribution history</h2><p>Drives and events you attended</p></div><Link to="/contributions" className="btn btn-sm">Full history</Link></div>
             {history.length === 0 ? <Empty title="No attended activities yet" /> : (
               <ul className="list">
-                {history.map(({ p, a }) => <li key={p.id}><ActivityRow a={a!} right={<div className="stack-sm" style={{ alignItems: 'flex-end' }}><HoursBadge p={p} />{p.verifiedHours != null && <span className="small num">{fmtHours(p.verifiedHours)} · {p.credits} cr</span>}</div>} /></li>)}
+                {history.map(({ p, a }) => <li key={p.id}><ActivityRow a={a!} right={<CreditsBadge p={p} />} /></li>)}
               </ul>
             )}
           </section>
@@ -151,6 +157,13 @@ export function DashboardPage() {
               </ul>
             )}
           </section>
+
+          {polls.filter(pollIsOpen).length > 0 && (
+            <section className="card">
+              <div className="card-head"><h2>Open polls</h2><Link to="/polls" className="btn btn-sm">Vote</Link></div>
+              <ul className="list">{polls.filter(pollIsOpen).slice(0, 3).map((p) => <li key={p.id}><Link to="/polls" className="list-link" style={{ display: 'block' }}><h3 style={{ fontSize: 14.5 }}>{p.question}</h3><div className="small muted">{p.options.length} options{p.closesAt ? ` · closes ${fmtShort(p.closesAt)}` : ''}</div></Link></li>)}</ul>
+            </section>
+          )}
 
           {meetings.length > 1 && (
             <section className="card">
@@ -185,5 +198,37 @@ export function DashboardPage() {
         </div>
       </div>
     </>
+  );
+}
+
+/** New-member checklist; disappears once complete or dismissed. */
+function Onboarding() {
+  const { profile } = useMe();
+  const { participations, activityById } = useData();
+  const { busy, run } = useAction();
+  const st = onboardingState(profile, participations, activityById);
+  if (!st.isNew || st.complete || st.dismissed) return null;
+  const tick = (key: string, value: boolean) => run(() => api.setOnboarding({ ...(profile.onboarding ?? {}), [key]: value }));
+  return (
+    <section className="card" style={{ marginBottom: 20, borderColor: 'var(--brand-2)' }}>
+      <div className="card-head">
+        <div><h2>Welcome to ElevateX</h2><p>A few things to do in your first weeks · {st.count} of {st.total} done</p></div>
+        <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => tick('dismissed', true)}>Hide</button>
+      </div>
+      <ul className="list">
+        {ONBOARDING.map((i) => {
+          const done = !!st.done[i.key];
+          return (
+            <li key={i.key} className="spread" style={{ flexWrap: 'nowrap' }}>
+              <label className="check" style={{ flex: 1, minWidth: 0, opacity: done ? 0.6 : 1 }}>
+                <input type="checkbox" checked={done} disabled={i.auto || busy} onChange={(e) => tick(i.key, e.target.checked)} />
+                <span><span style={done ? { textDecoration: 'line-through' } : undefined}>{i.label}</span><span className="tiny muted" style={{ display: 'block' }}>{i.hint}</span></span>
+              </label>
+              {i.link && !done && (i.link.startsWith('http') ? <a className="btn btn-sm" href={i.link} target="_blank" rel="noopener noreferrer">Open</a> : <Link className="btn btn-sm" to={i.link}>Open</Link>)}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

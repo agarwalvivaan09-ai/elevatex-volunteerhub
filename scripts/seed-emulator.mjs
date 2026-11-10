@@ -58,6 +58,7 @@ async function main() {
     ['meera', 'meera@elevatex.test', 'Meera Nair', 'member', 'hr', null],
     ['ishaan', 'ishaan@elevatex.test', 'Ishaan Verma', 'member', 'finance', null],
     ['zoya', 'zoya@elevatex.test', 'Zoya Khan', 'member', 'marketing', null],
+    ['alum', 'alum@elevatex.test', 'Kunal Jain', 'member', 'finance', 'Former Finance member'],
   ];
   const pos = Object.fromEntries(POSITIONS.map((p) => [p.id, p]));
   const uid = {};
@@ -65,7 +66,7 @@ async function main() {
   for (const [key, email, name, positionId, departmentId, title] of people) {
     uid[key] = await createUser(email);
     nameByUid[uid[key]] = name;
-    await put(`users/${uid[key]}`, { name, email, role: pos[positionId].role, status: 'active', positionId, departmentId, title, bio: null, responsibilities: null, joinedAt: day(-200) });
+    await put(`users/${uid[key]}`, { name, email, role: pos[positionId].role, status: key === 'alum' ? 'alumni' : 'active', positionId, departmentId, title, bio: null, responsibilities: null, joinedAt: key === 'zoya' ? day(-10) : day(-200) });
   }
   await put('meta/bootstrap', { adminUid: uid.chair, at: new Date() });
   for (const { id, ...d } of DEPARTMENTS) await put(`departments/${id}`, d);
@@ -73,7 +74,7 @@ async function main() {
 
   const base = { capacity: null, credits: 1, openForRequests: true, createdAt: day(-30), links: [], instructions: '', requirements: '', mode: 'in_person', mapUrl: MAP, meetingUrl: null, audience: 'all', relatedActivityId: null, reviewedBy: null, reviewNote: null };
   const drive = (x) => ({ ...base, type: 'drive', departmentId: 'drive-execution', ...x });
-  const meeting = (x) => ({ ...base, type: 'meeting', mode: 'online', mapUrl: null, meetingUrl: MEET, credits: 0, openForRequests: false, venue: 'Online', ...x });
+  const meeting = (x) => ({ ...base, type: 'meeting', mode: 'online', mapUrl: null, meetingUrl: MEET, credits: 1, openForRequests: false, venue: 'Online', ...x });
   const acts = {
     blanket: drive({ title: 'Winter Blanket Drive', status: 'upcoming', startAt: day(6, 9), endAt: hrs(day(6, 9), 4), venue: 'Shelter Home, Sector 12', createdBy: uid.drives, leadUid: uid.drives, capacity: 25,
       description: 'Distributing 400 blankets to families at the shelter home ahead of the cold wave.', instructions: 'Meet at the gate at 8:45. Wear your ElevateX T-shirt.', requirements: 'Available 9am–1pm.',
@@ -91,14 +92,21 @@ async function main() {
 
   const P = (aid, who, extra) => put(`participations/${aid}_${uid[who]}`, {
     activityId: aid, uid: uid[who], userName: nameByUid[uid[who]], status: 'approved', source: 'volunteer', note: null, assignment: null, reviewNote: null, reviewedBy: null, reviewedAt: null,
-    attendance: null, attendanceBy: null, hoursLogged: null, hoursNote: null, hoursStatus: 'none', verifiedHours: null, credits: 0, verifiedBy: null, verifiedAt: null, createdAt: day(-2), ...extra,
+    attendance: null, attendanceBy: null, credits: 0, createdAt: day(-2), ...extra,
   });
-  const V = (h) => ({ attendance: 'present', hoursLogged: h, hoursStatus: 'verified', verifiedHours: h, credits: 1, verifiedBy: uid.drives, verifiedAt: day(-1) });
+  const V = (c = 1) => ({ attendance: 'present', credits: c });
   await P('blanket', 'member', { assignment: 'Distribution team' });
   await P('blanket', 'zoya', { note: 'I can film for the reel' });
-  for (const [who, h] of [['member', 3], ['rohan', 4], ['meera', 3.5], ['zoya', 4]]) await P('food', who, V(h));
-  await P('food', 'ishaan', { attendance: 'present', hoursLogged: 3, hoursStatus: 'pending', hoursNote: '10:00 to 13:00' });
-  for (const [who, h] of [['member', 2.5], ['rohan', 3]]) await P('trees', who, { ...V(h), verifiedBy: uid.board2 });
+  await put('activityStats/blanket', { count: 2, waitlist: [] });
+  await put('activities/smallmeet', { ...base, type: 'drive', title: 'Old-age home visit (6 spots)', status: 'upcoming', startAt: day(4, 11), endAt: hrs(day(4, 11), 2), venue: 'Little Sisters Home', createdBy: uid.drives, leadUid: uid.drives, departmentId: 'drive-execution', capacity: 2, leadName: 'Aanya Das', createdByName: 'Aanya Das' });
+  for (const w of ['rohan', 'meera']) await P('smallmeet', w, {});
+  await put('activityStats/smallmeet', { count: 2, waitlist: [] });
+  // Meeting attendance with credits
+  await P('mkt', 'member', { source: 'assigned', ...V(1) });
+  for (const who of ['member', 'rohan', 'meera', 'zoya']) await P('food', who, V(2));
+  await P('food', 'ishaan', {});
+  for (const who of ['member', 'rohan']) await P('trees', who, V(1));
+  await P('trees', 'alum', V(1));
 
   const edpi = async (id, plan, results) => {
     const out = computeEdpi(plan, results);
@@ -115,6 +123,11 @@ async function main() {
   await T('Reconcile food drive receipts', 'ishaan', 'cfo', 'finance', 2, 'done', 'Matches Rs. 50,000');
   await T('Call 3 new recruits for onboarding', 'meera', 'hr', 'hr', 5);
 
+  await add('announcements', { title: 'Winter Blanket Drive needs 10 more volunteers', body: 'Sign up on the drive page. Meet at the gate at 8:45.', audience: 'all', departmentId: null, pinned: true, createdBy: uid.chair, createdByName: 'Arjun Malhotra', createdAt: day(-1) });
+  await add('announcements', { title: 'Reel deadline moved to Friday', body: 'Marketing: final cuts by Friday 6pm.', audience: 'department', departmentId: 'marketing', pinned: false, createdBy: uid.cmo, createdByName: 'Isha Sen', createdAt: day(-2) });
+  await put('polls/venue', { question: 'Where should the December fundraiser be?', options: ['School auditorium', 'Community hall', 'Rooftop cafe'], audience: 'all', departmentIds: [], uids: [], multi: false, closed: false, closesAt: day(5), createdBy: uid.ceo, createdByName: 'Kabir Rao', createdAt: day(-1) });
+  await add('docs', { title: 'ElevateX brochure', url: 'https://docs.google.com/presentation/d/1gLPNjh5FNLWjpo_ycVOpqHAxaVn6SpMwxy2oTIQMgMs', description: 'For schools, NGOs and sponsors', audience: 'all', departmentId: null, createdBy: uid.chair, createdByName: 'Arjun Malhotra', createdAt: day(-3) });
+  await add('applications', { name: 'Priya Bose', email: 'priya@elevatex.test', phone: '9800000000', school: 'La Martiniere', grade: 'Class 10', city: 'Kolkata', departments: ['marketing'], why: 'I edit videos and want to help with the Instagram.', heard: 'A friend', availability: 'Weekends', consent: true, status: 'new', createdAt: day(-1) });
   await add('feedback', { authorName: 'Ananya Iyer', authorUid: uid.member, rating: 4, category: 'Drives & events', message: 'Loved the food drive. Would like clearer instructions the day before.', status: 'new', hrNote: null, createdAt: day(-4) });
   await add('feedback', { authorName: 'Rohan Gupta', authorUid: uid.rohan, rating: 2, category: 'Workload', message: 'Too many tasks landed in the same week as exams.', status: 'new', hrNote: null, createdAt: day(-2) });
 

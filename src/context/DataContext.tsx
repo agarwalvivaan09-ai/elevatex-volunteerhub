@@ -3,7 +3,7 @@ import { collection, onSnapshot, query, where, type Query } from 'firebase/fires
 import { db } from '../lib/firebase';
 import { fromFirestore } from '../lib/api';
 import { useMe } from './AuthContext';
-import type { Activity, AppNotification, CertRequest, DeptRequest, Department, EdpiRecord, Feedback, Participation, Position, Task, UserProfile } from '../lib/types';
+import type { Activity, Announcement, AppNotification, Application, CertRequest, DeptRequest, Poll, Department, EdpiRecord, Feedback, Participation, Position, Task, UserProfile } from '../lib/types';
 
 /**
  * Live, shared data for the whole signed-in app. Every list is a realtime
@@ -26,6 +26,10 @@ interface Data {
   deptRequests: DeptRequest[];
   /** HR & leadership: all. Others: their own. */
   certRequests: CertRequest[];
+  announcements: Announcement[];
+  polls: Poll[];
+  /** HR and Leadership only: applications from elevate-x.in. */
+  applications: Application[];
   /** Core team: everyone. Members: the core team and themselves. */
   userById: Map<string, UserProfile>;
   positionById: Map<string, Position>;
@@ -113,13 +117,37 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byCreatedDesc,
   );
 
+  // Announcements: core team sees all; others see everyone-posts and their department's.
+  const [annAll, a1] = useLive<Announcement>(can.isCore ? 'ann:all' : null, col('announcements'));
+  const [annPublic, a2] = useLive<Announcement>(can.isCore ? null : 'ann:public', () => query(collection(db, 'announcements'), where('audience', '==', 'all')));
+  const [annDept, a3] = useLive<Announcement>(!can.isCore && can.dept ? `ann:dept:${can.dept}` : null, () => query(collection(db, 'announcements'), where('departmentId', '==', can.dept)));
+  const announcements = useMemo(() => {
+    const m = new Map<string, Announcement>();
+    for (const x of [...annAll, ...annPublic, ...annDept]) m.set(x.id, x);
+    return [...m.values()].sort((x, y) => Number(y.pinned) - Number(x.pinned) || (y.createdAt?.getTime() ?? Date.now()) - (x.createdAt?.getTime() ?? Date.now()));
+  }, [annAll, annPublic, annDept]);
+
+  // Polls: Leadership sees all; others see polls for everyone, their department, them personally, or that they made.
+  const [pollAll, p1] = useLive<Poll>(can.isLeadership ? 'polls:all' : null, col('polls'));
+  const [pollPublic, p2] = useLive<Poll>(can.isLeadership ? null : 'polls:public', () => query(collection(db, 'polls'), where('audience', '==', 'all')));
+  const [pollDept, p3] = useLive<Poll>(!can.isLeadership && can.dept ? `polls:dept:${can.dept}` : null, () => query(collection(db, 'polls'), where('departmentIds', 'array-contains', can.dept)));
+  const [pollMe, p4] = useLive<Poll>(can.isLeadership ? null : `polls:me:${me}`, () => query(collection(db, 'polls'), where('uids', 'array-contains', me)));
+  const [pollMine, p5] = useLive<Poll>(can.isLeadership ? null : `polls:by:${me}`, () => query(collection(db, 'polls'), where('createdBy', '==', me)));
+  const polls = useMemo(() => {
+    const m = new Map<string, Poll>();
+    for (const x of [...pollAll, ...pollPublic, ...pollDept, ...pollMe, ...pollMine]) m.set(x.id, x);
+    return [...m.values()].sort((x, y) => (y.createdAt?.getTime() ?? Date.now()) - (x.createdAt?.getTime() ?? Date.now()));
+  }, [pollAll, pollPublic, pollDept, pollMe, pollMine]);
+
+  const [applications, ap1] = useLive<Application>(can.canSeeFeedback ? 'applications' : null, col('applications'), byCreatedDesc);
+
   const tasks = useMemo(() => {
     const m = new Map<string, Task>();
     for (const t of [...tasksAll, ...tasksDept, ...tasksMine, ...tasksByMe]) m.set(t.id, t);
     return [...m.values()].sort((a, b) => (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity));
   }, [tasksAll, tasksDept, tasksMine, tasksByMe]);
 
-  const ready = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10 && t1 && t2 && t3 && t4;
+  const ready = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10 && a1 && a2 && a3 && p1 && p2 && p3 && p4 && p5 && ap1 && t1 && t2 && t3 && t4;
 
   const value = useMemo<Data>(
     () => ({
@@ -135,12 +163,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
       feedback,
       deptRequests,
       certRequests,
+      announcements,
+      polls,
+      applications,
       userById: new Map(users.map((u) => [u.id, u])),
       positionById: new Map(positions.map((p) => [p.id, p])),
       departmentById: new Map(departments.map((d) => [d.id, d])),
       activityById: new Map(activities.map((a) => [a.id, a])),
     }),
-    [ready, users, positions, departments, activities, participations, edpi, tasks, notifications, feedback, deptRequests, certRequests],
+    [ready, users, positions, departments, activities, participations, edpi, tasks, notifications, feedback, deptRequests, certRequests, announcements, polls, applications],
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
@@ -152,14 +183,14 @@ export function useData() {
   return d;
 }
 
-/** Contribution totals for one member, from verified records only. */
+/** Contribution totals for one member. Credits come from being marked present at drives, events and meetings. */
 export function summarise(parts: Participation[], activityById: Map<string, Activity>) {
-  const verified = parts.filter((p) => p.hoursStatus === 'verified');
+  const present = parts.filter((p) => p.attendance === 'present' && activityById.has(p.activityId));
   return {
-    verifiedHours: verified.reduce((s, p) => s + (p.verifiedHours ?? 0), 0),
-    credits: verified.reduce((s, p) => s + (p.credits ?? 0), 0),
-    attended: parts.filter((p) => p.attendance === 'present').length,
-    pendingRequests: parts.filter((p) => p.status === 'requested').length,
+    credits: present.reduce((s, p) => s + (p.credits ?? 0), 0),
+    attended: present.filter((p) => activityById.get(p.activityId)?.type !== 'meeting').length,
+    meetings: present.filter((p) => activityById.get(p.activityId)?.type === 'meeting').length,
+    waitlisted: parts.filter((p) => p.status === 'waitlisted').length,
     upcomingAssignments: parts.filter(
       (p) => p.status === 'approved' && activityById.get(p.activityId)?.status === 'upcoming',
     ).length,

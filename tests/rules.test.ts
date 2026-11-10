@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
 
 let env: RulesTestEnvironment;
 const future = Timestamp.fromDate(new Date(Date.now() + 7 * 86400000));
@@ -130,10 +130,44 @@ describe('volunteering', () => {
     await assertSucceeds(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { attendance: 'present' }));
     await assertFails(getDocs(query(collection(as('hrmember'), 'participations'), where('activityId', '==', 'mine'))));
   });
-  it('organiser cannot verify their own hours', async () => {
-    await seed((db) => setDoc(doc(db, 'participations/mine_fin'), part('fin', 'mine', { attendance: 'present' })));
-    await assertFails(updateDoc(doc(as('fin'), 'participations/mine_fin'), { hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
-    await assertSucceeds(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { attendance: 'present', hoursStatus: 'verified', verifiedHours: 3, credits: 1 }));
+  it('credits only for people marked present; organisers cannot credit themselves', async () => {
+    await assertFails(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { credits: 1 }));
+    await assertSucceeds(updateDoc(doc(as('fin'), 'participations/mine_mkt'), { attendance: 'present', credits: 1 }));
+    await seed((db) => setDoc(doc(db, 'participations/mine_fin'), part('fin', 'mine')));
+    await assertFails(updateDoc(doc(as('fin'), 'participations/mine_fin'), { attendance: 'present', credits: 1 }));
+    await assertSucceeds(updateDoc(doc(as('board'), 'participations/mine_fin'), { attendance: 'present', credits: 1 }));
+  });
+  it('meeting hosts mark attendance and give credits', async () => {
+    await seed((db) => setDoc(doc(db, 'activities/m'), act({ type: 'meeting', audience: 'department', departmentId: 'marketing', createdBy: 'cmo', mode: 'online', mapUrl: null, meetingUrl: 'https://meet.google.com/a' })));
+    await assertSucceeds(setDoc(doc(as('cmo'), 'participations/m_mkt'), part('mkt', 'm', { source: 'assigned', attendance: 'present', credits: 1 })));
+    await assertFails(setDoc(doc(as('mkt'), 'participations/m_mkt2'), part('mkt', 'm', { attendance: 'present', credits: 1 })));
+  });
+  it('waitlist: full drives only accept waitlisted sign-ups; the counter cannot be faked', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'activities/full'), act({ capacity: 1 }));
+      await setDoc(doc(db, 'activityStats/full'), { count: 1, waitlist: [] });
+      await setDoc(doc(db, 'participations/full_fin'), part('fin', 'full'));
+    });
+    const db = as('mkt');
+    let b = writeBatch(db);
+    b.set(doc(db, 'participations/full_mkt'), part('mkt', 'full'));
+    b.set(doc(db, 'activityStats/full'), { count: 2, waitlist: [] });
+    await assertFails(b.commit());
+    b = writeBatch(db);
+    b.set(doc(db, 'participations/full_mkt'), part('mkt', 'full', { status: 'waitlisted' }));
+    b.set(doc(db, 'activityStats/full'), { count: 1, waitlist: ['mkt'] });
+    await assertSucceeds(b.commit());
+    await assertFails(setDoc(doc(db, 'activityStats/full'), { count: 0, waitlist: ['mkt'] }));
+    // fin withdraws, freeing the spot; mkt claims it
+    const fdb = as('fin');
+    b = writeBatch(fdb);
+    b.delete(doc(fdb, 'participations/full_fin'));
+    b.set(doc(fdb, 'activityStats/full'), { count: 0, waitlist: ['mkt'] });
+    await assertSucceeds(b.commit());
+    b = writeBatch(db);
+    b.update(doc(db, 'participations/full_mkt'), { status: 'approved' });
+    b.set(doc(db, 'activityStats/full'), { count: 1, waitlist: [] });
+    await assertSucceeds(b.commit());
   });
 });
 
@@ -231,12 +265,83 @@ describe('recording past activities & certificates', () => {
     await assertFails(setDoc(doc(as('drivehead'), 'edpi/old'), { plan, locked: false, results: null }));
   });
   it('anyone requests a certificate; HR issues it', async () => {
-    const r = { uid: 'board', userName: 'board', kind: 'hours', nameOnCertificate: 'Board Person', note: null, status: 'pending', activityId: null, certificateUrl: null, hrNote: null };
+    const r = { uid: 'board', userName: 'board', kind: 'credits', creditsAtRequest: 7, nameOnCertificate: 'Board Person', note: null, status: 'pending', activityId: null, certificateUrl: null, hrNote: null };
     await assertSucceeds(setDoc(doc(as('board'), 'certRequests/c1'), r));
     await assertSucceeds(setDoc(doc(as('fin'), 'certRequests/c2'), { ...r, uid: 'fin' }));
     await assertFails(setDoc(doc(as('fin'), 'certRequests/c3'), { ...r, uid: 'mkt' }));
     await assertFails(getDoc(doc(as('mkt'), 'certRequests/c2')));
     await assertSucceeds(updateDoc(doc(as('hrmember'), 'certRequests/c2'), { status: 'issued', certificateUrl: 'https://drive.google.com/x', certificateId: 'EX-2026-001' }));
     await assertFails(updateDoc(doc(as('fin'), 'certRequests/c2'), { status: 'issued' }));
+  });
+});
+
+describe('photos, announcements, polls, documents, history, applications, alumni', () => {
+  const img = 'data:image/jpeg;base64,' + 'A'.repeat(1000);
+  it('attended volunteers and organisers upload drive photos; others cannot', async () => {
+    await assertSucceeds(setDoc(doc(as('mkt'), 'photos/p1'), { activityId: 'done', uid: 'mkt', data: img, caption: null }));
+    await assertFails(setDoc(doc(as('fin'), 'photos/p2'), { activityId: 'done', uid: 'fin', data: img, caption: null }));
+    await assertSucceeds(getDoc(doc(as('fin'), 'photos/p1')));
+  });
+  it('heads announce to their department; leadership to everyone; members read what is meant for them', async () => {
+    const a = (by: string, audience: string, departmentId: string | null) => ({ title: 'Hi', body: 'Text', audience, departmentId, pinned: false, createdBy: by });
+    await assertSucceeds(setDoc(doc(as('cmo'), 'announcements/a1'), a('cmo', 'department', 'marketing')));
+    await assertFails(setDoc(doc(as('cmo'), 'announcements/a2'), a('cmo', 'all', null)));
+    await assertSucceeds(setDoc(doc(as('board'), 'announcements/a3'), a('board', 'all', null)));
+    await assertFails(setDoc(doc(as('mkt'), 'announcements/a4'), a('mkt', 'all', null)));
+    await assertSucceeds(getDoc(doc(as('mkt'), 'announcements/a1')));
+    await assertFails(getDoc(doc(as('fin'), 'announcements/a1')));
+    await assertSucceeds(getDocs(query(collection(as('fin'), 'announcements'), where('audience', '==', 'all'))));
+    await assertSucceeds(getDocs(query(collection(as('mkt'), 'announcements'), where('departmentId', '==', 'marketing'))));
+    await assertSucceeds(setDoc(doc(as('fin'), 'announcements/a3/reads/fin'), { at: 1 }));
+  });
+  it('polls: heads poll their department, leadership polls anyone; votes only from people asked', async () => {
+    const p = (by: string, audience: string, departmentIds: string[], uids: string[] = []) => ({ question: 'Venue?', options: ['A', 'B'], audience, departmentIds, uids, multi: false, closed: false, closesAt: null, createdBy: by });
+    await assertSucceeds(setDoc(doc(as('cmo'), 'polls/p1'), p('cmo', 'departments', ['marketing'])));
+    await assertFails(setDoc(doc(as('cmo'), 'polls/p2'), p('cmo', 'departments', ['finance'])));
+    await assertFails(setDoc(doc(as('cmo'), 'polls/p3'), p('cmo', 'all', [])));
+    await assertSucceeds(setDoc(doc(as('board'), 'polls/p4'), p('board', 'people', [], ['fin'])));
+    await assertSucceeds(setDoc(doc(as('mkt'), 'polls/p1/votes/mkt'), { choices: [1] }));
+    await assertFails(setDoc(doc(as('fin'), 'polls/p1/votes/fin'), { choices: [0] }));
+    await assertFails(setDoc(doc(as('mkt'), 'polls/p1/votes/mkt'), { choices: [0, 1] }));
+    await assertSucceeds(setDoc(doc(as('fin'), 'polls/p4/votes/fin'), { choices: [0] }));
+    await assertSucceeds(getDocs(query(collection(as('mkt'), 'polls'), where('departmentIds', 'array-contains', 'marketing'))));
+    await assertSucceeds(getDocs(query(collection(as('fin'), 'polls'), where('uids', 'array-contains', 'fin'))));
+    await assertFails(getDoc(doc(as('fin'), 'polls/p1')));
+  });
+  it('documents: heads add to their department, leadership anywhere', async () => {
+    const d = (by: string, audience: string, departmentId: string | null) => ({ title: 'Guide', url: 'https://drive.google.com/x', description: null, audience, departmentId, createdBy: by });
+    await assertSucceeds(setDoc(doc(as('cmo'), 'docs/d1'), d('cmo', 'department', 'marketing')));
+    await assertFails(setDoc(doc(as('mkt'), 'docs/d2'), d('mkt', 'all', null)));
+    await assertSucceeds(setDoc(doc(as('ceo'), 'docs/d3'), d('ceo', 'all', null)));
+    await assertFails(getDoc(doc(as('fin'), 'docs/d1')));
+  });
+  it('change history is append-only and leadership-only', async () => {
+    await assertSucceeds(setDoc(doc(as('fin'), 'audit/x'), { action: 'credits.changed', actorUid: 'fin', detail: null, at: serverTimestamp() }));
+    await assertFails(setDoc(doc(as('fin'), 'audit/y'), { action: 'x', actorUid: 'mkt', detail: null, at: serverTimestamp() }));
+    await assertFails(getDoc(doc(as('cmo'), 'audit/x')));
+    await assertSucceeds(getDoc(doc(as('board'), 'audit/x')));
+    await assertFails(updateDoc(doc(as('chair'), 'audit/x'), { action: 'y' }));
+  });
+  it('website applications: anyone can apply, only HR and leadership read', async () => {
+    const appl = { name: 'New Person', email: 'new@x.org', phone: null, school: 'DPS', grade: '10', city: 'Kolkata', departments: ['marketing'], why: 'I want to help with drives', heard: null, availability: null, consent: true, status: 'new', createdAt: serverTimestamp() };
+    const anon = env.unauthenticatedContext().firestore();
+    await assertSucceeds(setDoc(doc(anon, 'applications/ap1'), appl));
+    await assertFails(setDoc(doc(anon, 'applications/ap2'), { ...appl, status: 'accepted' }));
+    await assertFails(setDoc(doc(anon, 'applications/ap3'), { ...appl, extra: 'spam' }));
+    await assertFails(getDoc(doc(anon, 'applications/ap1')));
+    await assertSucceeds(getDoc(doc(as('hrmember'), 'applications/ap1')));
+    await assertFails(getDoc(doc(as('mkt'), 'applications/ap1')));
+    await assertSucceeds(updateDoc(doc(as('hrmember'), 'applications/ap1'), { status: 'interview' }));
+  });
+  it('alumni keep their own history and can request certificates, nothing else', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users/alum'), user('member', { email: 'alum@x.org', status: 'alumni' }));
+      await setDoc(doc(db, 'participations/done_alum'), part('alum', 'done', { attendance: 'present', credits: 1 }));
+    });
+    await assertSucceeds(getDoc(doc(as('alum'), 'participations/done_alum')));
+    await assertSucceeds(getDoc(doc(as('alum'), 'activities/done')));
+    await assertSucceeds(setDoc(doc(as('alum'), 'certRequests/ca'), { uid: 'alum', userName: 'alum', kind: 'credits', creditsAtRequest: 1, nameOnCertificate: 'Alum', note: null, status: 'pending', certificateUrl: null }));
+    await assertFails(getDoc(doc(as('alum'), 'users/fin')));
+    await assertFails(setDoc(doc(as('alum'), 'participations/a1_alum'), part('alum', 'a1')));
   });
 });

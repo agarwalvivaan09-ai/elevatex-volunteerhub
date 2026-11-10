@@ -182,8 +182,15 @@ function ResultsForm({ a, record, parts }: { a: Activity; record: EdpiRecord; pa
   const { busy, run } = useAction();
   const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }));
 
-  const verified = parts.filter((p) => p.hoursStatus === 'verified').map((p) => p.verifiedHours ?? 0);
-  const unverified = parts.filter((p) => p.attendance === 'present' && p.hoursStatus !== 'verified').length;
+  // EDPI needs each volunteer's hours. They come from the sign-in sheet and are only stored with the score.
+  const present = parts.filter((p) => p.attendance === 'present');
+  const duration = a.endAt ? Math.max(0.5, Math.round(((a.endAt.getTime() - a.startAt.getTime()) / 3600000) * 4) / 4) : 3;
+  const [memberHours, setMemberHours] = useState<Record<string, string>>(() => {
+    const saved = r?.hoursEach ?? [];
+    return Object.fromEntries(present.map((p, i) => [p.id, String(saved[i] ?? duration)]));
+  });
+  const hoursFor = (p: Participation) => Number(memberHours[p.id] ?? duration);
+  const verified = present.map(hoursFor);
   const extraHours = parseHoursList(f.extra);
   const filled = f.spent !== '' && f.peopleHelped !== '' && f.impactDone !== '';
 
@@ -218,14 +225,28 @@ function ResultsForm({ a, record, parts }: { a: Activity; record: EdpiRecord; pa
             <Field label={`Impact done (${record.plan.impactUnit})`} hint="Same unit as the target">
               <input className="input" type="number" min={0} value={f.impactDone} onChange={(e) => set('impactDone', e.target.value)} />
             </Field>
-            <Field label="Extra volunteers' hours (optional)" hint="People not on the Hub, from the sign-in sheet — one number per volunteer, e.g. 3, 2.5, 4">
+            <Field label="Volunteers not on the Hub (optional)" hint="Their hours from the sign-in sheet, one number each, e.g. 3, 2.5, 4">
               <input className="input" value={f.extra} onChange={(e) => set('extra', e.target.value)} />
             </Field>
           </div>
+          {present.length > 0 && (
+            <div>
+              <div className="small" style={{ fontWeight: 500, marginBottom: 8 }}>Hours each volunteer gave (from the sign-in sheet)</div>
+              <div className="hours-grid">
+                {present.map((p) => (
+                  <label key={p.id} className="hours-cell">
+                    <span>{p.userName ?? 'Volunteer'}</span>
+                    <input className="input" type="number" min={0.5} max={24} step={0.25} value={memberHours[p.id] ?? String(duration)}
+                      onChange={(e) => setMemberHours((m) => ({ ...m, [p.id]: e.target.value }))} aria-label={`Hours for ${p.userName ?? 'volunteer'}`} />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="callout">
-            <b>Volunteer hours come from the Hub.</b> {verified.length} verified volunteer{verified.length === 1 ? '' : 's'} ({fmtHours(verified.reduce((s, h) => s + h, 0))})
-            {extraHours && extraHours.length > 0 ? ` + ${extraHours.length} extra from the sign-in sheet` : ''} = <b>{verified.length + (extraHours?.length ?? 0)} volunteers</b>.
-            {unverified > 0 && <> <span style={{ color: 'var(--warn)' }}>{unverified} present volunteer{unverified === 1 ? ' has' : 's have'} unverified hours — verify them in “Attendance & hours” first or they won't count.</span></>}
+            <b>{present.length} volunteer{present.length === 1 ? '' : 's'} marked present</b> ({fmtHours(verified.reduce((s, h) => s + h, 0))})
+            {extraHours && extraHours.length > 0 ? ` + ${extraHours.length} from the sign-in sheet who aren't on the Hub` : ''} = <b>{present.length + (extraHours?.length ?? 0)} volunteers</b> for EDPI.
+            {present.length === 0 && <> Mark attendance first so volunteers count.</>}
           </div>
           {!extraHours && <div className="callout bad">Extra hours must be numbers separated by commas.</div>}
           {preview?.rejections.length ? <div className="callout bad">{preview.rejections.join(' ')}</div> : null}

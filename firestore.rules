@@ -24,6 +24,8 @@ service cloud.firestore {
     function userPath(id) { return /databases/$(database)/documents/users/$(id); }
     function me() { return get(userPath(uid())).data; }
     function isActive() { return signedIn() && exists(userPath(uid())) && me().status == 'active'; }
+    // Alumni keep read-only access to their own history and can still request certificates.
+    function isMember() { return signedIn() && exists(userPath(uid())) && me().status in ['active', 'alumni']; }
     function myRole() { return me().role; }
     function myDept() { return me().get('departmentId', null); }
 
@@ -56,7 +58,8 @@ service cloud.firestore {
       return str(d.name, 120) && d.name.size() > 0
         && str(d.email, 200)
         && d.role in ['chairman', 'vice_chairman', 'executive', 'board', 'hod', 'member', 'admin', 'core']
-        && d.status in ['active', 'removed']
+        && d.status in ['active', 'removed', 'alumni']
+        && (d.get('onboarding', null) == null || d.get('onboarding', null) is map)
         && (d.positionId == null || d.positionId is string)
         && (d.get('departmentId', null) == null || d.get('departmentId', null) is string)
         && optStr(d.get('title', null), 120)
@@ -86,7 +89,7 @@ service cloud.firestore {
       allow update: if validProfile(request.resource.data)
         && request.resource.data.email == resource.data.email && (
           // Everyone: own personal fields only.
-          (isActive() && uid() == id && changed().hasOnly(['name', 'bio', 'updatedAt']))
+          (isActive() && uid() == id && changed().hasOnly(['name', 'bio', 'onboarding', 'updatedAt']))
           // v1 → v2 migration: the original admin becomes Chairman.
           || (isActive() && uid() == id && resource.data.role == 'admin' && request.resource.data.role == 'chairman'
               && request.resource.data.status == 'active')
@@ -113,11 +116,11 @@ service cloud.firestore {
 
     // ---------------------------------------------------------------- structure
     match /departments/{id} {
-      allow read: if isActive();
+      allow read: if isMember();
       allow write: if isPeopleAdmin();
     }
     match /positions/{id} {
-      allow read: if isActive();
+      allow read: if isMember();
       allow write: if isPeopleAdmin();
     }
 
@@ -158,7 +161,7 @@ service cloud.firestore {
     }
 
     match /activities/{id} {
-      allow read: if isActive();
+      allow read: if isMember();
 
       allow create: if isActive() && validActivity(request.resource.data)
         && request.resource.data.createdBy == uid()
@@ -191,71 +194,96 @@ service cloud.firestore {
         || (isActive() && resource.data.createdBy == uid() && resource.data.status in ['proposed', 'declined']);
     }
 
-    // ---------------------------------------------------------------- volunteering & attendance
-    // Document id is "<activityId>_<uid>".
+    // ---------------------------------------------------------------- volunteering, attendance & credits
+    // Document id is "<activityId>_<uid>". Credits are only given to people marked present.
     function activity(aid) { return get(/databases/$(database)/documents/activities/$(aid)).data; }
-    function hoursOk(h) { return h is number && h >= 0.5 && h <= 24; }
+    function partPath(aid, who) { return /databases/$(database)/documents/participations/$(aid + '_' + who); }
+    function statsPath(aid) { return /databases/$(database)/documents/activityStats/$(aid); }
 
     function validParticipation(d) {
-      return d.status in ['requested', 'approved', 'deferred', 'rejected']
+      return d.status in ['requested', 'approved', 'deferred', 'rejected', 'waitlisted']
         && (d.attendance == null || d.attendance in ['present', 'absent'])
-        && d.hoursStatus in ['none', 'pending', 'verified', 'rejected']
-        && d.credits is number && d.credits >= 0
-        && (d.hoursStatus != 'verified' || (d.attendance == 'present' && d.status == 'approved' && hoursOk(d.verifiedHours)))
-        && (d.hoursStatus == 'verified' || (d.credits == 0 && d.verifiedHours == null));
+        && d.credits is number && d.credits >= 0 && d.credits <= 20
+        && (d.credits == 0 || (d.attendance == 'present' && d.status == 'approved'));
     }
 
     function presentVolunteer(aid) {
       return isActive()
-        && exists(/databases/$(database)/documents/participations/$(aid + '_' + uid()))
-        && get(/databases/$(database)/documents/participations/$(aid + '_' + uid())).data.attendance == 'present';
+        && exists(partPath(aid, uid()))
+        && get(partPath(aid, uid())).data.attendance == 'present';
+    }
+
+    // A spot is free if the activity has no limit, or the shared counter (updated in the same write) stays within it.
+    function withinCapacity(aid) {
+      return activity(aid).get('capacity', null) == null
+        || (existsAfter(statsPath(aid)) && getAfter(statsPath(aid)).data.count <= activity(aid).capacity);
     }
 
     match /participations/{pid} {
       allow read: if isCore()
-        || (isActive() && resource.data.uid == uid())
+        || (isMember() && resource.data.uid == uid())
         || canManage(activity(resource.data.activityId))
         || presentVolunteer(resource.data.activityId);
 
-      // Volunteer: one click adds you to the volunteer list.
+      // Volunteer with one click, or join the waitlist when the drive is full.
       allow create: if isActive()
         && pid == request.resource.data.activityId + '_' + uid()
         && request.resource.data.uid == uid()
-        && request.resource.data.status == 'approved'
+        && request.resource.data.status in ['approved', 'waitlisted']
         && request.resource.data.source == 'volunteer'
         && request.resource.data.attendance == null
-        && request.resource.data.hoursStatus == 'none'
         && request.resource.data.credits == 0
-        && request.resource.data.verifiedHours == null
         && activity(request.resource.data.activityId).status == 'upcoming'
         && activity(request.resource.data.activityId).openForRequests == true
-        && activity(request.resource.data.activityId).type in ['drive', 'fundraiser', 'event'];
+        && activity(request.resource.data.activityId).type in ['drive', 'fundraiser', 'event']
+        && (request.resource.data.status == 'waitlisted' || withinCapacity(request.resource.data.activityId));
 
-      // Organisers can add volunteers directly.
+      // Organisers add people (volunteers, meeting attendees, past records). Only Leadership can credit themselves.
       allow create: if pid == request.resource.data.activityId + '_' + request.resource.data.uid
         && canManage(activity(request.resource.data.activityId))
-        && validParticipation(request.resource.data);
+        && validParticipation(request.resource.data)
+        && (request.resource.data.uid != uid() || request.resource.data.credits == 0 || isLeadership());
 
       allow update: if validParticipation(request.resource.data)
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.activityId == resource.data.activityId
         && (
           (canManage(activity(resource.data.activityId))
-            // Nobody verifies their own hours except Leadership.
-            && !(request.resource.data.hoursStatus == 'verified' && resource.data.hoursStatus != 'verified'
-                 && resource.data.uid == uid() && !isLeadership()))
+            // Nobody marks or credits themselves, except Leadership.
+            && (resource.data.uid != uid() || isLeadership()
+                || (request.resource.data.attendance == resource.data.attendance && request.resource.data.credits == resource.data.credits)))
+          // A waitlisted volunteer claims a freed spot.
           || (isActive() && resource.data.uid == uid()
-              && resource.data.attendance == 'present'
-              && resource.data.status == 'approved'
-              && resource.data.hoursStatus in ['none', 'pending', 'rejected']
-              && request.resource.data.hoursStatus == 'pending'
-              && hoursOk(request.resource.data.hoursLogged)
-              && optStr(request.resource.data.get('hoursNote', null), 500)
-              && changed().hasOnly(['hoursLogged', 'hoursNote', 'hoursStatus', 'hoursSubmittedAt', 'updatedAt']))
+              && resource.data.status == 'waitlisted' && request.resource.data.status == 'approved'
+              && changed().hasOnly(['status', 'updatedAt'])
+              && withinCapacity(resource.data.activityId))
         );
 
       allow delete: if canManage(activity(resource.data.activityId))
-        || (isActive() && resource.data.uid == uid() && resource.data.attendance == null && resource.data.hoursStatus == 'none');
+        || (isActive() && resource.data.uid == uid() && resource.data.attendance == null && resource.data.credits == 0);
+    }
+
+    // Shared spot counter and waitlist for each activity, readable by every member.
+    // Members can only move the counter by exactly their own change, in the same write.
+    match /activityStats/{aid} {
+      function wl() { return resource == null ? [] : resource.data.waitlist; }
+      function cnt() { return resource == null ? 0 : resource.data.count; }
+      function before() { return exists(partPath(aid, uid())) ? get(partPath(aid, uid())).data.status : 'none'; }
+      function after() { return existsAfter(partPath(aid, uid())) ? getAfter(partPath(aid, uid())).data.status : 'none'; }
+      function n() { return request.resource.data.count; }
+      function w() { return request.resource.data.waitlist; }
+      function selfChange() {
+        return isActive() && request.resource.data.keys().hasOnly(['count', 'waitlist', 'updatedAt']) && (
+          (before() == 'none' && after() == 'approved' && n() == cnt() + 1 && w() == wl())
+          || (before() == 'none' && after() == 'waitlisted' && n() == cnt() && w() == wl().concat([uid()]))
+          || (before() == 'approved' && after() == 'none' && n() == cnt() - 1 && w() == wl())
+          || (before() == 'waitlisted' && after() == 'none' && n() == cnt() && w() == wl().removeAll([uid()]))
+          || (before() == 'waitlisted' && after() == 'approved' && n() == cnt() + 1 && w() == wl().removeAll([uid()]))
+        );
+      }
+      allow read: if isMember();
+      allow create, update: if canManage(activity(aid)) || selfChange();
+      allow delete: if isLeadership();
     }
 
     // ---------------------------------------------------------------- EDPI
@@ -349,11 +377,13 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------------- certificate requests (to HR)
+    // Made by hand by HR. The requester's credits are attached automatically. Alumni can request too.
     match /certRequests/{id} {
-      allow read: if isActive() && (resource.data.uid == uid() || inHr() || isLeadership());
-      allow create: if isActive() && request.resource.data.uid == uid()
+      allow read: if isMember() && (resource.data.uid == uid() || inHr() || isLeadership());
+      allow create: if isMember() && request.resource.data.uid == uid()
         && request.resource.data.status == 'pending'
-        && request.resource.data.kind in ['activity', 'hours', 'membership', 'role']
+        && request.resource.data.kind in ['activity', 'credits', 'membership', 'role']
+        && request.resource.data.creditsAtRequest is number
         && str(request.resource.data.nameOnCertificate, 120)
         && optStr(request.resource.data.get('note', null), 1000)
         && request.resource.data.get('certificateUrl', null) == null;
@@ -361,7 +391,122 @@ service cloud.firestore {
         && changed().hasOnly(['status', 'hrNote', 'certificateUrl', 'certificateId', 'reviewedBy', 'reviewedAt'])
         && request.resource.data.status in ['pending', 'issued', 'declined']
         && (request.resource.data.get('certificateUrl', null) == null || httpsUrl(request.resource.data.certificateUrl));
-      allow delete: if isActive() && resource.data.uid == uid() && resource.data.status == 'pending';
+      allow delete: if isMember() && resource.data.uid == uid() && resource.data.status == 'pending';
+    }
+
+    // ---------------------------------------------------------------- drive photos
+    // Compressed images stored in Firestore (no paid Storage plan needed).
+    match /photos/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.uid == uid()
+        && request.resource.data.data is string && request.resource.data.data.size() < 950000
+        && optStr(request.resource.data.get('caption', null), 200)
+        && (isCore() || canManage(activity(request.resource.data.activityId)) || presentVolunteer(request.resource.data.activityId));
+      allow update: if false;
+      allow delete: if isActive() && (resource.data.uid == uid() || isCore() || canManage(activity(resource.data.activityId)));
+    }
+
+    // ---------------------------------------------------------------- announcements
+    function canPost(d) {
+      return isLeadership() || (isHod() && d.audience == 'department' && d.departmentId == myDept());
+    }
+    match /announcements/{id} {
+      allow read: if isActive() && (resource.data.audience == 'all' || isCore()
+        || resource.data.get('departmentId', null) == myDept() || resource.data.createdBy == uid());
+      allow create: if isActive() && request.resource.data.createdBy == uid()
+        && str(request.resource.data.title, 160) && str(request.resource.data.body, 4000)
+        && request.resource.data.audience in ['all', 'core', 'department']
+        && (request.resource.data.audience == 'department') == (request.resource.data.get('departmentId', null) != null)
+        && canPost(request.resource.data);
+      allow update: if (resource.data.createdBy == uid() || isTop()) && canPost(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if resource.data.createdBy == uid() || isTop();
+      // Read receipts: one document per reader.
+      match /reads/{reader} {
+        allow create: if isActive() && reader == uid();
+        allow read: if isActive() && (reader == uid() || isLeadership()
+          || get(/databases/$(database)/documents/announcements/$(id)).data.createdBy == uid());
+      }
+    }
+
+    // ---------------------------------------------------------------- polls
+    function canSeePoll(p) {
+      return myDept() in p.departmentIds || uid() in p.uids || p.audience == 'all'
+        || isLeadership() || p.createdBy == uid();
+    }
+    function validPoll(p) {
+      return str(p.question, 300) && p.options is list && p.options.size() >= 2 && p.options.size() <= 8
+        && p.audience in ['all', 'departments', 'people'] && p.departmentIds is list && p.uids is list
+        && p.multi is bool && p.closed is bool;
+    }
+    match /polls/{id} {
+      allow read: if isActive() && canSeePoll(resource.data);
+      // Heads poll their own department; Leadership polls anyone.
+      allow create: if isActive() && request.resource.data.createdBy == uid() && validPoll(request.resource.data)
+        && (isLeadership() || (isHod() && request.resource.data.audience == 'departments' && request.resource.data.departmentIds == [myDept()]));
+      allow update: if (resource.data.createdBy == uid() || isTop()) && validPoll(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.audience == resource.data.audience
+        && request.resource.data.departmentIds == resource.data.departmentIds
+        && request.resource.data.uids == resource.data.uids;
+      allow delete: if resource.data.createdBy == uid() || isTop();
+      match /votes/{voter} {
+        function poll() { return get(/databases/$(database)/documents/polls/$(id)).data; }
+        function open() { return poll().closed == false && (poll().get('closesAt', null) == null || request.time < poll().closesAt); }
+        allow read: if isActive() && canSeePoll(poll());
+        allow create, update: if isActive() && voter == uid() && canSeePoll(poll()) && open()
+          && request.resource.data.choices is list && request.resource.data.choices.size() >= 1
+          && request.resource.data.choices.size() <= (poll().multi ? poll().options.size() : 1);
+        allow delete: if isActive() && voter == uid() && open();
+      }
+    }
+
+    // ---------------------------------------------------------------- documents library
+    match /docs/{id} {
+      allow read: if isActive() && (resource.data.audience == 'all' || isCore()
+        || resource.data.get('departmentId', null) == myDept());
+      allow create: if isActive() && request.resource.data.createdBy == uid()
+        && str(request.resource.data.title, 160) && httpsUrl(request.resource.data.url)
+        && optStr(request.resource.data.get('description', null), 1000)
+        && request.resource.data.audience in ['all', 'core', 'department']
+        && (request.resource.data.audience == 'department') == (request.resource.data.get('departmentId', null) != null)
+        && canPost(request.resource.data);
+      allow update: if (resource.data.createdBy == uid() || isLeadership()) && httpsUrl(request.resource.data.url)
+        && request.resource.data.createdBy == resource.data.createdBy && canPost(request.resource.data);
+      allow delete: if resource.data.createdBy == uid() || isLeadership();
+    }
+
+    // ---------------------------------------------------------------- change history (append-only)
+    match /audit/{id} {
+      allow read: if isLeadership();
+      allow create: if isActive() && request.resource.data.actorUid == uid()
+        && str(request.resource.data.action, 80) && optStr(request.resource.data.get('detail', null), 500)
+        && request.resource.data.at == request.time;
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- applications from elevate-x.in
+    // Anyone can apply from the website, without an account. Only HR and Leadership can read them.
+    match /applications/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['name', 'email', 'phone', 'school', 'grade', 'city', 'departments', 'why', 'heard', 'availability', 'consent', 'status', 'createdAt'])
+        && str(request.resource.data.name, 120) && request.resource.data.name.size() > 1
+        && str(request.resource.data.email, 200) && request.resource.data.email.matches('[^@\\s]+@[^@\\s]+\\.[^@\\s]+')
+        && optStr(request.resource.data.get('phone', null), 30)
+        && str(request.resource.data.school, 200)
+        && optStr(request.resource.data.get('grade', null), 30)
+        && optStr(request.resource.data.get('city', null), 80)
+        && request.resource.data.departments is list && request.resource.data.departments.size() <= 5
+        && str(request.resource.data.why, 2000) && request.resource.data.why.size() > 9
+        && optStr(request.resource.data.get('heard', null), 200)
+        && optStr(request.resource.data.get('availability', null), 300)
+        && request.resource.data.consent == true
+        && request.resource.data.status == 'new'
+        && request.resource.data.createdAt == request.time;
+      allow read: if inHr() || isLeadership();
+      allow update: if (inHr() || isLeadership())
+        && changed().hasOnly(['status', 'hrNotes', 'reviewedBy', 'reviewedAt', 'accountUid'])
+        && request.resource.data.status in ['new', 'reviewing', 'interview', 'accepted', 'rejected', 'added'];
+      allow delete: if isTop();
     }
 
     match /{document=**} {

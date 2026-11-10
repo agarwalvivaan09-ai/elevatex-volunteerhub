@@ -29,6 +29,14 @@ const HrPage = named(() => import('./pages/Feedback'), 'HrPage');
 const DepartmentPage = named(() => import('./pages/Department'), 'DepartmentPage');
 const MorePage = named(() => import('./pages/More'), 'MorePage');
 const RecordPage = named(() => import('./pages/Record'), 'RecordPage');
+const DriveReportPage = named(() => import('./pages/DriveReport'), 'DriveReportPage');
+const AnnouncementsPage = named(() => import('./pages/Announcements'), 'AnnouncementsPage');
+const PollsPage = named(() => import('./pages/Polls'), 'PollsPage');
+const DocumentsPage = named(() => import('./pages/Documents'), 'DocumentsPage');
+const HistoryPage = named(() => import('./pages/History'), 'HistoryPage');
+const MonthlyReportPage = named(() => import('./pages/MonthlyReport'), 'MonthlyReportPage');
+const ApplicationsPage = named(() => import('./pages/Applications'), 'ApplicationsPage');
+const AlumniPage = named(() => import('./pages/Alumni'), 'AlumniPage');
 
 function CoreOnly({ children }: { children: ReactNode }) {
   const { can } = useMe();
@@ -42,6 +50,7 @@ function Gate() {
   if (s.status === 'signedOut') return <LoginPage />;
   if (s.status === 'noProfile') return <SetupPage />;
   if (s.status === 'removed') return <RemovedPage />;
+  if (s.status === 'alumni') return <Suspense fallback={<Loading />}><AlumniPage /></Suspense>;
   return (
     <DataProvider>
       <Routes>
@@ -55,6 +64,7 @@ function Gate() {
                 <Route path="activities/new" element={<ActivityFormPage />} />
                 <Route path="activities/:id" element={<ActivityDetailPage />} />
                 <Route path="activities/:id/edit" element={<ActivityFormPage />} />
+                <Route path="activities/:id/report" element={<DriveReportPage />} />
                 <Route path="tasks" element={<TasksPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
                 <Route path="hr" element={<HrPage />} />
@@ -70,6 +80,12 @@ function Gate() {
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="more" element={<MorePage />} />
                 <Route path="record" element={<RecordPage />} />
+                <Route path="announcements" element={<AnnouncementsPage />} />
+                <Route path="polls" element={<PollsPage />} />
+                <Route path="documents" element={<DocumentsPage />} />
+                <Route path="history" element={<HistoryPage />} />
+                <Route path="report" element={<MonthlyReportPage />} />
+                <Route path="applications" element={<ApplicationsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>

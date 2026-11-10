@@ -6,7 +6,6 @@ import * as api from '../lib/api';
 import { normRole } from '../lib/access';
 import { MAX_HODS } from '../lib/structure';
 import type { Position, UserProfile } from '../lib/types';
-import { fmtHours } from '../lib/format';
 import { Avatar, Confirm, Empty, Field, Modal, useAction } from '../components/ui';
 import { PersonCard, RoleBadge, bySeniority, displayTitle } from '../components/people';
 import { IconMail, IconPlus, IconUsers } from '../components/icons';
@@ -28,9 +27,9 @@ function PeoplePage() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<UserProfile | null>(null);
 
-  const hoursBy = useMemo(() => {
+  const creditsBy = useMemo(() => {
     const m = new Map<string, number>();
-    for (const p of participations) if (p.hoursStatus === 'verified') m.set(p.uid, (m.get(p.uid) ?? 0) + (p.verifiedHours ?? 0));
+    for (const p of participations) if (p.attendance === 'present') m.set(p.uid, (m.get(p.uid) ?? 0) + (p.credits ?? 0));
     return m;
   }, [participations]);
 
@@ -62,7 +61,7 @@ function PeoplePage() {
           <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{can.isPeopleAdmin ? 'Manage' : 'List'}</button>
         </div>
         <div className="row">
-          {can.isPeopleAdmin && view === 'table' && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show removed</label>}
+          {can.isPeopleAdmin && view === 'table' && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show alumni &amp; removed</label>}
           <input className="input" style={{ width: 240 }} placeholder="Search name, position, department…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search people" />
         </div>
       </div>
@@ -86,7 +85,7 @@ function PeoplePage() {
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr><th>Person</th><th>Position</th><th>Department</th><th>Access</th>{can.isCore && <th className="num">Verified hours</th>}<th className="num">{can.isPeopleAdmin ? 'Manage' : ''}</th></tr>
+                <tr><th>Person</th><th>Position</th><th>Department</th><th>Access</th>{can.isCore && <th className="num">Credits</th>}<th className="num">{can.isPeopleAdmin ? 'Manage' : ''}</th></tr>
               </thead>
               <tbody>
                 {tableRows.map((u) => {
@@ -96,8 +95,8 @@ function PeoplePage() {
                       <td><div className="person"><Avatar name={u.name} size="sm" /><div><Link to={`/members/${u.id}`}>{u.name}</Link><div className="tiny muted">{u.email}</div></div></div></td>
                       <td className="small">{displayTitle(u, positionById)}</td>
                       <td className="small">{u.departmentId ? departmentById.get(u.departmentId)?.name ?? '—' : <span className="muted">—</span>}</td>
-                      <td><RoleBadge role={u.role} />{u.status === 'removed' && <span className="badge bad" style={{ marginLeft: 6 }}>Removed</span>}</td>
-                      {can.isCore && <td className="num">{fmtHours(hoursBy.get(u.id) ?? 0)}</td>}
+                      <td><RoleBadge role={u.role} />{u.status === 'removed' && <span className="badge bad" style={{ marginLeft: 6 }}>Removed</span>}{u.status === 'alumni' && <span className="badge info" style={{ marginLeft: 6 }}>Alumni</span>}</td>
+                      {can.isCore && <td className="num">{creditsBy.get(u.id) ?? 0}</td>}
                       <td className="num">
                         <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
                           <a className="btn btn-sm" href={`mailto:${u.email}`} aria-label={`Email ${u.name}`}><IconMail /></a>
@@ -146,19 +145,19 @@ function ContactsPage() {
 }
 
 /** Add or edit a person. The position decides their access; members also pick a department. */
-export function PersonModal({ u, onClose }: { u?: UserProfile; onClose: () => void }) {
+export function PersonModal({ u, onClose, prefill, onAdded }: { u?: UserProfile; onClose: () => void; prefill?: { name: string; email: string; departmentId: string | null }; onAdded?: (uid: string) => Promise<void> | void }) {
   const { can } = useMe();
   const { positions, departments, users } = useData();
   const [f, setF] = useState({
-    name: u?.name ?? '',
-    email: u?.email ?? '',
+    name: u?.name ?? prefill?.name ?? '',
+    email: u?.email ?? prefill?.email ?? '',
     positionId: u?.positionId && positions.some((p) => p.id === u.positionId) ? u.positionId : 'member',
-    departmentId: u?.departmentId ?? '',
+    departmentId: u?.departmentId ?? prefill?.departmentId ?? '',
     title: u?.title ?? '',
     responsibilities: u?.responsibilities ?? '',
   });
   const [done, setDone] = useState<{ inviteSent: boolean } | null>(null);
-  const [confirm, setConfirm] = useState<'remove' | 'restore' | null>(null);
+  const [confirm, setConfirm] = useState<'remove' | 'restore' | 'alumni' | null>(null);
   const { busy, run } = useAction();
 
   const choosable = positions.filter((p) => p.role !== 'chairman' && (p.role !== 'vice_chairman' || can.isChair));
@@ -173,10 +172,10 @@ export function PersonModal({ u, onClose }: { u?: UserProfile; onClose: () => vo
   async function save() {
     const data = { name: f.name, email: f.email, positionId: f.positionId, role, departmentId, title: f.title.trim() || null };
     if (u) {
-      const ok = await run(() => api.updateMember(u.id, { name: f.name.trim(), positionId: f.positionId, role, departmentId, title: data.title, responsibilities: f.responsibilities.trim() || null }), 'Saved');
+      const ok = await run(() => api.updateMember(u.id, { name: f.name.trim(), positionId: f.positionId, role, departmentId, title: data.title, responsibilities: f.responsibilities.trim() || null }, u), 'Saved');
       if (ok) onClose();
     } else {
-      await run(async () => setDone(await api.addMember(data)));
+      await run(async () => { const r = await api.addMember(data); await onAdded?.(r.uid); setDone(r); });
     }
   }
 
@@ -191,8 +190,8 @@ export function PersonModal({ u, onClose }: { u?: UserProfile; onClose: () => vo
     <Modal title={u ? `Edit ${u.name}` : 'Add a person'} onClose={onClose}
       footer={<>
         {u && (u.status === 'active'
-          ? <button className="btn btn-danger" style={{ marginRight: 'auto' }} onClick={() => setConfirm('remove')}>Remove access</button>
-          : <button className="btn btn-ok" style={{ marginRight: 'auto' }} onClick={() => setConfirm('restore')}>Restore access</button>)}
+          ? <div className="row" style={{ marginRight: 'auto' }}><button className="btn btn-danger" onClick={() => setConfirm('remove')}>Remove access</button><button className="btn" onClick={() => setConfirm('alumni')}>Mark as alumni</button></div>
+          : <button className="btn btn-ok" style={{ marginRight: 'auto' }} onClick={() => setConfirm('restore')}>{u.status === 'alumni' ? 'Make active again' : 'Restore access'}</button>)}
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" disabled={busy || !valid} onClick={save}>{u ? 'Save' : busy ? 'Adding…' : 'Add and send invite'}</button>
       </>}>
@@ -219,12 +218,17 @@ export function PersonModal({ u, onClose }: { u?: UserProfile; onClose: () => vo
       {u && <Field label="Individual responsibilities (optional)"><textarea className="textarea" value={f.responsibilities} onChange={(e) => setF({ ...f, responsibilities: e.target.value })} /></Field>}
       {u && <div className="row small"><span className="muted">Sign-in email: {u.email}</span><button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => run(() => api.sendInvite(u.email), 'Password-setup email sent')}>Resend invite</button></div>}
       {u && confirm === 'remove' && (
-        <Confirm title={`Remove ${u.name}?`} danger confirmLabel="Remove access" message="They lose access to everything immediately. Their history and verified hours are kept and you can restore them later."
-          onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'removed' }), 'Access removed')) onClose(); }} />
+        <Confirm title={`Remove ${u.name}?`} danger confirmLabel="Remove access" message="They lose access to everything immediately. Their history and credits are kept and you can restore them later. To keep their access to their own history, mark them as alumni instead."
+          onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'removed' }, u), 'Access removed')) onClose(); }} />
       )}
       {u && confirm === 'restore' && (
         <Confirm title={`Restore ${u.name}?`} confirmLabel="Restore" message="They can sign in again with the same account."
-          onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'active' }), 'Access restored')) onClose(); }} />
+          onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'active' }, u), 'Access restored')) onClose(); }} />
+      )}
+      {u && confirm === 'alumni' && (
+        <Confirm title={`Mark ${u.name} as alumni?`} confirmLabel="Mark as alumni"
+          message="For members who have graduated or moved on. They keep read-only access to their own credits and history and can still request certificates, but they no longer get notifications, tasks or meetings, and don't count as active."
+          onClose={() => setConfirm(null)} onConfirm={async () => { if (await run(() => api.updateMember(u.id, { status: 'alumni' }, u), 'Marked as alumni')) onClose(); }} />
       )}
     </Modal>
   );
