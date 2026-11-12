@@ -41,6 +41,8 @@ service cloud.firestore {
     // only the top four and the Head of HR add accepted applicants to the Hub.
     function canReviewApps() { return isTop() || inHr(); }
     function canAddApplicant() { return isTop() || isHodOf('hr'); }
+    // People management (add, promote, remove): Chairman, Vice Chairman, CEO, COO and the Head of HR.
+    function isPeopleManager() { return isTop() || isHodOf('hr'); }
 
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
     function str(v, max) { return v is string && v.size() <= max; }
@@ -79,12 +81,9 @@ service cloud.firestore {
       allow read: if isCore() || (signedIn() && uid() == id) || (isActive() && isCoreDoc(resource.data));
 
       allow create: if validProfile(request.resource.data) && (
-        // Chairman / Vice Chairman add people. Only the Chairman can appoint a Vice Chairman.
-        (isPeopleAdmin() && request.resource.data.role in ['executive', 'board', 'hod', 'member'])
+        // Chairman, Vice Chairman, CEO, COO and Head of HR add people. Only the Chairman can appoint a Vice Chairman.
+        (isPeopleManager() && request.resource.data.role in ['executive', 'board', 'hod', 'member'])
         || (isChair() && request.resource.data.role == 'vice_chairman')
-        // CEO, COO and the Head of HR can add accepted applicants, as ordinary members only.
-        || (canAddApplicant() && request.resource.data.role == 'member' && request.resource.data.positionId == 'member'
-            && request.resource.data.status == 'active')
         // One-time bootstrap of the Chairman account.
         || (signedIn() && uid() == id
             && request.resource.data.role == 'chairman'
@@ -106,18 +105,19 @@ service cloud.firestore {
           // HR head and top leadership can move a member to another department (department change requests).
           || ((isHodOf('hr') || isTop()) && resource.data.role in ['member', 'core']
               && changed().hasOnly(['departmentId', 'updatedAt']))
-          // Chairman / Vice Chairman manage everyone else. Nobody can be made Chairman;
-          // only the Chairman can appoint or change a Vice Chairman.
-          || (isPeopleAdmin() && !isChairDoc(resource.data) && !isChairDoc(request.resource.data)
-              && (isChair() || (resource.data.role != 'vice_chairman' && request.resource.data.role != 'vice_chairman')))
+          // Chairman, Vice Chairman, CEO, COO and Head of HR manage everyone else. Nobody can be made Chairman;
+          // only the Chairman can appoint or change a Vice Chairman. CEO, COO and Head of HR can't change their own record this way.
+          || (isPeopleManager() && !isChairDoc(resource.data) && !isChairDoc(request.resource.data)
+              && (isChair() || (resource.data.role != 'vice_chairman' && request.resource.data.role != 'vice_chairman'))
+              && (isPeopleAdmin() || id != uid()))
         );
 
       allow delete: if !isChairDoc(resource.data)
-        && (isChair() || (isPeopleAdmin() && resource.data.role != 'vice_chairman'));
+        && (isChair() || (isPeopleManager() && resource.data.role != 'vice_chairman' && (isPeopleAdmin() || id != uid())));
 
       match /private/{docId} {
         allow read: if (isActive() && uid() == id) || isCore();
-        allow write: if (isActive() && uid() == id) || isPeopleAdmin();
+        allow write: if (isActive() && uid() == id) || isPeopleManager();
       }
     }
 

@@ -26,7 +26,7 @@ Access comes from a person's **position**. The Chairman and Vice Chairman assign
 | Assign tasks | | own department only | anyone | anyone | anyone |
 | Read member feedback | HR dept only | HR head only | ✓ | ✓ | ✓ |
 | Analytics and approvals | | ✓ | ✓ | ✓ | ✓ |
-| Add or remove people, assign positions and heads | | | | | ✓ |
+| Add, promote or remove people (not the Chairman or Vice Chairman) | | Head of HR only | | ✓ | ✓ |
 
 The organiser of an activity manages its volunteer list, attendance and credits. The organiser can be any member whose drive was approved. Heads of Department can manage every activity in their own department. Nobody can mark their own attendance or credits, except Leadership.
 

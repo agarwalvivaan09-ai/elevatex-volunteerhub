@@ -76,7 +76,6 @@ function ApplicationModal({ a, onClose }: { a: Application; onClose: () => void 
     return (
       <PersonModal
         prefill={{ name: a.name, email: a.email, departmentId: a.departments[0] ?? null }}
-        memberOnly={!can.isPeopleAdmin}
         onAdded={(uid) => api.markApplicationAdded(a, uid)}
         onClose={() => { setAdding(false); onClose(); }}
       />

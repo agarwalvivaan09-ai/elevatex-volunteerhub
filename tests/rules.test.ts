@@ -55,12 +55,14 @@ beforeEach(async () => {
 });
 
 describe('people management', () => {
-  it('Chairman and Vice Chairman add anyone; CEO, COO and Head of HR add members only', async () => {
+  it('Chairman, Vice Chairman, CEO, COO and Head of HR manage people', async () => {
     await assertSucceeds(setDoc(doc(as('chair'), 'users/n1'), user('member', { email: 'n1@x.org' })));
     await assertSucceeds(setDoc(doc(as('vice'), 'users/n2'), user('hod', { email: 'n2@x.org', departmentId: 'finance' })));
-    // CEO/COO and the Head of HR may add accepted applicants, but only as ordinary members.
+    // CEO/COO and the Head of HR add, promote and remove people too (never Chairman or Vice Chairman).
     await assertSucceeds(setDoc(doc(as('ceo'), 'users/n3'), user('member', { email: 'n3@x.org', positionId: 'member' })));
-    await assertFails(setDoc(doc(as('ceo'), 'users/n3b'), user('hod', { email: 'n3b@x.org', departmentId: 'finance' })));
+    await assertSucceeds(setDoc(doc(as('ceo'), 'users/n3b'), user('hod', { email: 'n3b@x.org', departmentId: 'finance' })));
+    await assertFails(setDoc(doc(as('ceo'), 'users/n3e'), user('vice_chairman', { email: 'n3e@x.org' })));
+    await assertFails(setDoc(doc(as('hrhead'), 'users/n3f'), user('chairman', { email: 'n3f@x.org' })));
     await assertSucceeds(setDoc(doc(as('hrhead'), 'users/n3c'), user('member', { email: 'n3c@x.org', departmentId: 'marketing', positionId: 'member' })));
     await assertFails(setDoc(doc(as('hrmember'), 'users/n3d'), user('member', { email: 'n3d@x.org', positionId: 'member' })));
     await assertFails(setDoc(doc(as('board'), 'users/n4'), user('member', { email: 'n4@x.org' })));
@@ -78,6 +80,13 @@ describe('people management', () => {
   });
   it('people admins promote members; members only edit name/bio', async () => {
     await assertSucceeds(updateDoc(doc(as('vice'), 'users/mkt'), { role: 'hod', positionId: 'cmo' }));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'users/fin'), { role: 'hod', positionId: 'cfo', departmentId: 'finance' }));
+    await assertSucceeds(updateDoc(doc(as('ceo'), 'users/fin'), { status: 'removed' }));
+    await assertFails(updateDoc(doc(as('ceo'), 'users/vice'), { status: 'removed' }));
+    await assertFails(updateDoc(doc(as('hrhead'), 'users/chair'), { status: 'removed' }));
+    await assertFails(updateDoc(doc(as('hrhead'), 'users/hrhead'), { role: 'executive' }));
+    await assertFails(updateDoc(doc(as('hrmember'), 'users/mkt'), { role: 'hod' }));
+    await assertSucceeds(updateDoc(doc(as('ceo'), 'users/fin'), { status: 'active', role: 'member', positionId: null, departmentId: 'finance' }));
     await assertFails(updateDoc(doc(as('fin'), 'users/fin'), { role: 'hod' }));
     await assertSucceeds(updateDoc(doc(as('fin'), 'users/fin'), { bio: 'hello' }));
   });
@@ -244,7 +253,7 @@ describe('privacy & department changes', () => {
     await assertSucceeds(updateDoc(doc(as('hrmember'), 'deptRequests/r1'), { hrNote: 'Recommend yes' }));
     await assertSucceeds(updateDoc(doc(as('hrhead'), 'deptRequests/r1'), { status: 'approved' }));
     await assertSucceeds(updateDoc(doc(as('hrhead'), 'users/fin'), { departmentId: 'marketing' }));
-    await assertFails(updateDoc(doc(as('hrhead'), 'users/fin'), { role: 'hod' }));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'users/fin'), { role: 'hod' })); // Head of HR now manages people
     await assertFails(updateDoc(doc(as('cmo'), 'users/fin'), { departmentId: 'marketing' }));
   });
 });

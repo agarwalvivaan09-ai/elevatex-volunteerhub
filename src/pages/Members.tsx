@@ -19,10 +19,10 @@ export function MembersPage() {
 }
 
 function PeoplePage() {
-  const { can } = useMe();
+  const { can, profile } = useMe();
   const { users, positionById, departmentById, departments, participations } = useData();
   const [q, setQ] = useState('');
-  const [view, setView] = useState<'directory' | 'table'>(can.isPeopleAdmin ? 'table' : 'directory');
+  const [view, setView] = useState<'directory' | 'table'>(can.canManagePeople ? 'table' : 'directory');
   const [showRemoved, setShowRemoved] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<UserProfile | null>(null);
@@ -51,17 +51,17 @@ function PeoplePage() {
           <p>{users.filter((u) => u.status === 'active').length} active members. Email anyone directly from here.</p>
         </div>
         <div className="page-actions">
-          {can.isPeopleAdmin && <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />Add person</button>}
+          {can.canManagePeople && <button className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />Add person</button>}
         </div>
       </div>
 
       <div className="spread" style={{ marginBottom: 16 }}>
         <div className="segmented" role="group" aria-label="View">
           <button className={view === 'directory' ? 'on' : ''} onClick={() => setView('directory')}>By role</button>
-          <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{can.isPeopleAdmin ? 'Manage' : 'List'}</button>
+          <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{can.canManagePeople ? 'Manage' : 'List'}</button>
         </div>
         <div className="row">
-          {can.isPeopleAdmin && view === 'table' && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show alumni &amp; removed</label>}
+          {can.canManagePeople && view === 'table' && <label className="check small"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />Show alumni &amp; removed</label>}
           <input className="input" style={{ width: 240 }} placeholder="Search name, position, department…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search people" />
         </div>
       </div>
@@ -85,11 +85,11 @@ function PeoplePage() {
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr><th>Person</th><th>Position</th><th>Department</th><th>Access</th>{can.isCore && <th className="num">Credits</th>}<th className="num">{can.isPeopleAdmin ? 'Manage' : ''}</th></tr>
+                <tr><th>Person</th><th>Position</th><th>Department</th><th>Access</th>{can.isCore && <th className="num">Credits</th>}<th className="num">{can.canManagePeople ? 'Manage' : ''}</th></tr>
               </thead>
               <tbody>
                 {tableRows.map((u) => {
-                  const editable = can.isPeopleAdmin && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman');
+                  const editable = can.canManagePeople && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman') && (can.isPeopleAdmin || u.id !== profile.id);
                   return (
                     <tr key={u.id} style={u.status === 'removed' ? { opacity: 0.55 } : undefined}>
                       <td><div className="person"><Avatar name={u.name} size="sm" /><div><Link to={`/members/${u.id}`}>{u.name}</Link><div className="tiny muted">{u.email}</div></div></div></td>
@@ -239,8 +239,8 @@ export function PersonModal({ u, onClose, prefill, onAdded, memberOnly }: { u?: 
 const ACCESS_TEXT: Record<string, string> = {
   chairman: 'Full access, including adding and removing people.',
   vice_chairman: 'Full access, including adding and removing people and assigning positions.',
-  executive: 'Overall access to every department: drives, fundraisers, all meetings, tasks for anyone. Cannot add or remove people.',
+  executive: 'Overall access to every department: drives, fundraisers, all meetings, tasks for anyone. Can add, promote and remove people (not the Chairman or Vice Chairman).',
   board: 'Full view; can add drives, fundraisers and tasks for anyone, and call board meetings.',
-  hod: 'Runs their own department: department meetings and tasks for their members only. Approves drive proposals.',
+  hod: 'Runs their own department: department meetings and tasks for their members only. Approves drive proposals. The Head of HR can also add, promote and remove people.',
   member: 'Own dashboard, volunteering, proposing drives, tasks from their head.',
 };

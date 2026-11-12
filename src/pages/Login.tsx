@@ -86,7 +86,7 @@ export function LoginPage() {
             Continue with Google
           </button>
           <p className="muted small">
-            Accounts are created by the Chairman or Vice Chairman. New members get an email with a link to set their password.
+            Accounts are created by the HR team and leadership. New members get an email with a link to set their password.
             Google sign-in works if your Gmail address is the one you were registered with.
           </p>
           <a className="small" href="https://elevate-x.in" style={{ textAlign: 'center' }}>← Back to elevate-x.in</a>

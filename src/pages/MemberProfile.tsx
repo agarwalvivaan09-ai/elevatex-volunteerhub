@@ -49,7 +49,7 @@ export function MemberProfilePage() {
             </div>
           </div>
           <a className="btn" href={`mailto:${u.email}`}><IconMail />Email</a>
-          {can.isPeopleAdmin && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman') && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
+          {can.canManagePeople && normRole(u.role) !== 'chairman' && (can.isChair || normRole(u.role) !== 'vice_chairman') && (can.isPeopleAdmin || u.id !== me.id) && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
           {u.id === me.id && <Link className="btn" to="/profile">Edit my profile</Link>}
         </div>
         {u.bio && <p className="prose" style={{ marginTop: 14 }}>{u.bio}</p>}
