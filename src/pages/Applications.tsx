@@ -23,19 +23,19 @@ const TABS: [string, string, ApplicationStatus[]][] = [
   ['done', 'Done', ['added', 'rejected']],
 ];
 
-/** Applications submitted on elevate-x.in. HR reviews; Chairman / Vice Chairman add accepted people to the Hub. */
+/** Applications submitted on elevate-x.in. HR and the top four review; the top four and the Head of HR add accepted people to the Hub. */
 export function ApplicationsPage() {
   const { can } = useMe();
   const { applications } = useData();
   const [tab, setTab] = useState('open');
   const [open, setOpen] = useState<Application | null>(null);
-  if (!can.canSeeFeedback) return <Navigate to="/" replace />;
+  if (!can.canReviewApplications) return <Navigate to="/" replace />;
   const statuses = TABS.find((t) => t[0] === tab)![2];
   const list = applications.filter((a) => statuses.includes(a.status));
   return (
     <>
       <div className="page-head">
-        <div><h1>Applications</h1><p>People who applied on elevate-x.in. HR reviews them; once accepted, the Chairman or Vice Chairman adds them to the Hub in one click.</p></div>
+        <div><h1>Applications</h1><p>People who applied on elevate-x.in. HR reviews them; once accepted, the Head of HR or the Chairman, Vice Chairman, CEO or COO adds them to the Hub in one click.</p></div>
       </div>
       <div className="tabs">
         {TABS.map(([k, l, st]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}<span className="count">{applications.filter((a) => st.includes(a.status)).length}</span></button>)}
@@ -76,6 +76,7 @@ function ApplicationModal({ a, onClose }: { a: Application; onClose: () => void 
     return (
       <PersonModal
         prefill={{ name: a.name, email: a.email, departmentId: a.departments[0] ?? null }}
+        memberOnly={!can.isPeopleAdmin}
         onAdded={(uid) => api.markApplicationAdded(a, uid)}
         onClose={() => { setAdding(false); onClose(); }}
       />
@@ -88,8 +89,8 @@ function ApplicationModal({ a, onClose }: { a: Application; onClose: () => void 
         {a.status !== 'added' && a.status !== 'rejected' && <button className="btn btn-danger" disabled={busy} onClick={() => set('rejected', 'Marked as not this time')}>Not this time</button>}
         {(a.status === 'new') && <button className="btn" disabled={busy} onClick={() => set('reviewing', 'Marked as reviewing')}>Reviewing</button>}
         {(a.status === 'new' || a.status === 'reviewing') && <button className="btn" disabled={busy} onClick={() => set('interview', 'Moved to interview')}>Interview</button>}
-        {a.status !== 'accepted' && a.status !== 'added' && <button className="btn btn-ok" disabled={busy} onClick={() => set('accepted', 'Accepted. The Chairman or Vice Chairman can now add them.')}>Accept</button>}
-        {a.status === 'accepted' && can.isPeopleAdmin && <button className="btn btn-primary" onClick={() => setAdding(true)}>Add to the Hub</button>}
+        {a.status !== 'accepted' && a.status !== 'added' && <button className="btn btn-ok" disabled={busy} onClick={() => set('accepted', can.canAddApplicant ? 'Accepted. You can now add them to the Hub.' : 'Accepted. The Head of HR or leadership will add them to the Hub.')}>Accept</button>}
+        {a.status === 'accepted' && can.canAddApplicant && <button className="btn btn-primary" onClick={() => setAdding(true)}>Add to the Hub</button>}
       </>}>
       <div className="row"><span className={`badge ${STATUS[a.status].tone}`}>{STATUS[a.status].label}</span><span className="small muted">Applied {a.createdAt ? fmtDateTime(a.createdAt) : ''}</span></div>
       <dl className="detail-list">
@@ -102,9 +103,9 @@ function ApplicationModal({ a, onClose }: { a: Application; onClose: () => void 
         {a.heard && (<><dt>Heard about us</dt><dd>{a.heard}</dd></>)}
       </dl>
       <div><div className="small muted" style={{ marginBottom: 4 }}>Why they want to join</div><p className="prose">{a.why}</p></div>
-      <Field label="HR notes (only HR and leadership see these)"><textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Interview on Friday, good fit for Marketing." /></Field>
+      <Field label="HR notes (only HR and the top four see these)"><textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Interview on Friday, good fit for Marketing." /></Field>
       <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }} disabled={busy || notes === (a.hrNotes ?? '')} onClick={() => run(() => api.setApplicationStatus(a, a.status, notes), 'Notes saved')}>Save notes</button>
-      {a.status === 'accepted' && !can.isPeopleAdmin && <div className="callout info">Accepted. The Chairman or Vice Chairman will add them to the Hub, and they'll get an email to set their password.</div>}
+      {a.status === 'accepted' && !can.canAddApplicant && <div className="callout info">Accepted. The Head of HR or leadership will add them to the Hub, and they'll get an email to set their password.</div>}
     </Modal>
   );
 }

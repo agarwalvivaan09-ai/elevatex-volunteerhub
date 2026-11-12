@@ -55,10 +55,14 @@ beforeEach(async () => {
 });
 
 describe('people management', () => {
-  it('only Chairman and Vice Chairman can add people', async () => {
+  it('Chairman and Vice Chairman add anyone; CEO, COO and Head of HR add members only', async () => {
     await assertSucceeds(setDoc(doc(as('chair'), 'users/n1'), user('member', { email: 'n1@x.org' })));
     await assertSucceeds(setDoc(doc(as('vice'), 'users/n2'), user('hod', { email: 'n2@x.org', departmentId: 'finance' })));
-    await assertFails(setDoc(doc(as('ceo'), 'users/n3'), user('member', { email: 'n3@x.org' })));
+    // CEO/COO and the Head of HR may add accepted applicants, but only as ordinary members.
+    await assertSucceeds(setDoc(doc(as('ceo'), 'users/n3'), user('member', { email: 'n3@x.org', positionId: 'member' })));
+    await assertFails(setDoc(doc(as('ceo'), 'users/n3b'), user('hod', { email: 'n3b@x.org', departmentId: 'finance' })));
+    await assertSucceeds(setDoc(doc(as('hrhead'), 'users/n3c'), user('member', { email: 'n3c@x.org', departmentId: 'marketing', positionId: 'member' })));
+    await assertFails(setDoc(doc(as('hrmember'), 'users/n3d'), user('member', { email: 'n3d@x.org', positionId: 'member' })));
     await assertFails(setDoc(doc(as('board'), 'users/n4'), user('member', { email: 'n4@x.org' })));
     await assertFails(setDoc(doc(as('cmo'), 'users/n5'), user('member', { email: 'n5@x.org' })));
   });
@@ -322,8 +326,8 @@ describe('photos, announcements, polls, documents, history, applications, alumni
     await assertSucceeds(getDoc(doc(as('board'), 'audit/x')));
     await assertFails(updateDoc(doc(as('chair'), 'audit/x'), { action: 'y' }));
   });
-  it('website applications: anyone can apply, only HR and leadership read', async () => {
-    const appl = { name: 'New Person', email: 'new@x.org', phone: null, school: 'DPS', grade: '10', city: 'Kolkata', departments: ['marketing'], why: 'I want to help with drives', heard: null, availability: null, consent: true, status: 'new', createdAt: serverTimestamp() };
+  it('website applications: anyone can apply, only HR and the top four review', async () => {
+    const appl = { name: 'New Person', email: 'new@x.org', phone: '9830012345', school: 'DPS', grade: '10', city: 'Kolkata', departments: ['marketing'], why: 'I want to help with drives', heard: null, availability: null, consent: true, status: 'new', createdAt: serverTimestamp() };
     const anon = env.unauthenticatedContext().firestore();
     await assertSucceeds(setDoc(doc(anon, 'applications/ap1'), appl));
     await assertFails(setDoc(doc(anon, 'applications/ap2'), { ...appl, status: 'accepted' }));
@@ -332,6 +336,19 @@ describe('photos, announcements, polls, documents, history, applications, alumni
     await assertSucceeds(getDoc(doc(as('hrmember'), 'applications/ap1')));
     await assertFails(getDoc(doc(as('mkt'), 'applications/ap1')));
     await assertSucceeds(updateDoc(doc(as('hrmember'), 'applications/ap1'), { status: 'interview' }));
+    // Phone, class and city are required.
+    await assertFails(setDoc(doc(anon, 'applications/ap4'), { ...appl, phone: null }));
+    await assertFails(setDoc(doc(anon, 'applications/ap5'), { ...appl, grade: '' }));
+    await assertFails(setDoc(doc(anon, 'applications/ap6'), { ...appl, city: null }));
+    // Board and other heads don't see applications; the CEO does.
+    await assertFails(getDoc(doc(as('board'), 'applications/ap1')));
+    await assertFails(getDoc(doc(as('cmo'), 'applications/ap1')));
+    await assertSucceeds(getDoc(doc(as('ceo'), 'applications/ap1')));
+    // HR members accept; only the Head of HR or the top four mark someone as added to the Hub.
+    await assertSucceeds(updateDoc(doc(as('hrmember'), 'applications/ap1'), { status: 'accepted' }));
+    await assertFails(updateDoc(doc(as('hrmember'), 'applications/ap1'), { status: 'added', accountUid: 'n9' }));
+    await assertSucceeds(updateDoc(doc(as('hrhead'), 'applications/ap1'), { status: 'added', accountUid: 'n9' }));
+    await assertSucceeds(updateDoc(doc(as('hrmember'), 'applications/ap1'), { hrNotes: 'Joined Marketing' }));
   });
   it('alumni keep their own history and can request certificates, nothing else', async () => {
     await seed(async (db) => {

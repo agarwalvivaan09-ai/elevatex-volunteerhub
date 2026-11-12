@@ -145,7 +145,7 @@ function ContactsPage() {
 }
 
 /** Add or edit a person. The position decides their access; members also pick a department. */
-export function PersonModal({ u, onClose, prefill, onAdded }: { u?: UserProfile; onClose: () => void; prefill?: { name: string; email: string; departmentId: string | null }; onAdded?: (uid: string) => Promise<void> | void }) {
+export function PersonModal({ u, onClose, prefill, onAdded, memberOnly }: { u?: UserProfile; onClose: () => void; prefill?: { name: string; email: string; departmentId: string | null }; onAdded?: (uid: string) => Promise<void> | void; /** CEO, COO and Head of HR adding an applicant: position is fixed to Member. */ memberOnly?: boolean }) {
   const { can } = useMe();
   const { positions, departments, users } = useData();
   const [f, setF] = useState({
@@ -160,7 +160,7 @@ export function PersonModal({ u, onClose, prefill, onAdded }: { u?: UserProfile;
   const [confirm, setConfirm] = useState<'remove' | 'restore' | 'alumni' | null>(null);
   const { busy, run } = useAction();
 
-  const choosable = positions.filter((p) => p.role !== 'chairman' && (p.role !== 'vice_chairman' || can.isChair));
+  const choosable = memberOnly ? positions.filter((p) => p.id === 'member') : positions.filter((p) => p.role !== 'chairman' && (p.role !== 'vice_chairman' || can.isChair));
   const pos: Position | undefined = positions.find((p) => p.id === f.positionId);
   const role = pos?.role ?? 'member';
   const needsDept = role === 'member';
@@ -212,9 +212,11 @@ export function PersonModal({ u, onClose, prefill, onAdded }: { u?: UserProfile;
         </Field>
       )}
       {tooManyHods && <div className="callout bad">This department already has {MAX_HODS} heads. Change one of them first.</div>}
-      <Field label="Display title (optional)" hint="Shown instead of the position, e.g. “Founder, Former CEO & Chairman” or “Former Head of Drives”.">
-        <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
-      </Field>
+      {!memberOnly && (
+        <Field label="Display title (optional)" hint="Shown instead of the position, e.g. “Founder, Former CEO & Chairman” or “Former Head of Drives”.">
+          <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
+        </Field>
+      )}
       {u && <Field label="Individual responsibilities (optional)"><textarea className="textarea" value={f.responsibilities} onChange={(e) => setF({ ...f, responsibilities: e.target.value })} /></Field>}
       {u && <div className="row small"><span className="muted">Sign-in email: {u.email}</span><button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => run(() => api.sendInvite(u.email), 'Password-setup email sent')}>Resend invite</button></div>}
       {u && confirm === 'remove' && (

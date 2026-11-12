@@ -66,6 +66,10 @@ export function access(u: UserProfile) {
     canAssignTaskTo: (m: UserProfile) => isLeadership || (isHod && !!dept && m.departmentId === dept),
     canAssignTasks: isLeadership || isHod,
     canSeeFeedback: isLeadership || dept === DEPT.hr,
+    /** Applications from elevate-x.in: the top four and everyone in HR review them. */
+    canReviewApplications: isTop || dept === DEPT.hr,
+    /** Add an accepted applicant to the Hub (as a member): the top four and the Head of HR. */
+    canAddApplicant: isTop || isHodOf(DEPT.hr),
     canSeeAnalytics: isCore,
     canSeeContacts: isCore,
     canDeleteActivity: (a: Activity) => isLeadership || (a.createdBy === u.id && (a.status === 'proposed' || a.status === 'declined')),

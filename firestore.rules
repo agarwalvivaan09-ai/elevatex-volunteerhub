@@ -37,6 +37,10 @@ service cloud.firestore {
     function isHodOf(d) { return isHod() && myDept() == d; }
     function isCore() { return isLeadership() || isHod(); }
     function inHr() { return isActive() && myDept() == 'hr'; }
+    // Applications from elevate-x.in: the top four and the whole HR department review them;
+    // only the top four and the Head of HR add accepted applicants to the Hub.
+    function canReviewApps() { return isTop() || inHr(); }
+    function canAddApplicant() { return isTop() || isHodOf('hr'); }
 
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
     function str(v, max) { return v is string && v.size() <= max; }
@@ -78,6 +82,9 @@ service cloud.firestore {
         // Chairman / Vice Chairman add people. Only the Chairman can appoint a Vice Chairman.
         (isPeopleAdmin() && request.resource.data.role in ['executive', 'board', 'hod', 'member'])
         || (isChair() && request.resource.data.role == 'vice_chairman')
+        // CEO, COO and the Head of HR can add accepted applicants, as ordinary members only.
+        || (canAddApplicant() && request.resource.data.role == 'member' && request.resource.data.positionId == 'member'
+            && request.resource.data.status == 'active')
         // One-time bootstrap of the Chairman account.
         || (signedIn() && uid() == id
             && request.resource.data.role == 'chairman'
@@ -491,10 +498,10 @@ service cloud.firestore {
       allow create: if request.resource.data.keys().hasOnly(['name', 'email', 'phone', 'school', 'grade', 'city', 'departments', 'why', 'heard', 'availability', 'consent', 'status', 'createdAt'])
         && str(request.resource.data.name, 120) && request.resource.data.name.size() > 1
         && str(request.resource.data.email, 200) && request.resource.data.email.matches('[^@\\s]+@[^@\\s]+\\.[^@\\s]+')
-        && optStr(request.resource.data.get('phone', null), 30)
+        && str(request.resource.data.phone, 30) && request.resource.data.phone.size() > 6
         && str(request.resource.data.school, 200)
-        && optStr(request.resource.data.get('grade', null), 30)
-        && optStr(request.resource.data.get('city', null), 80)
+        && str(request.resource.data.grade, 30) && request.resource.data.grade.size() > 0
+        && str(request.resource.data.city, 80) && request.resource.data.city.size() > 1
         && request.resource.data.departments is list && request.resource.data.departments.size() <= 5
         && str(request.resource.data.why, 2000) && request.resource.data.why.size() > 9
         && optStr(request.resource.data.get('heard', null), 200)
@@ -502,10 +509,13 @@ service cloud.firestore {
         && request.resource.data.consent == true
         && request.resource.data.status == 'new'
         && request.resource.data.createdAt == request.time;
-      allow read: if inHr() || isLeadership();
-      allow update: if (inHr() || isLeadership())
+      allow read: if canReviewApps();
+      allow update: if canReviewApps()
         && changed().hasOnly(['status', 'hrNotes', 'reviewedBy', 'reviewedAt', 'accountUid'])
-        && request.resource.data.status in ['new', 'reviewing', 'interview', 'accepted', 'rejected', 'added'];
+        && request.resource.data.status in ['new', 'reviewing', 'interview', 'accepted', 'rejected', 'added']
+        // Marking someone as added to the Hub is for the people who can add them.
+        && ((!changed().hasAny(['accountUid']) && !(request.resource.data.status == 'added' && resource.data.status != 'added'))
+            || canAddApplicant());
       allow delete: if isTop();
     }
 

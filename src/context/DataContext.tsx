@@ -28,7 +28,7 @@ interface Data {
   certRequests: CertRequest[];
   announcements: Announcement[];
   polls: Poll[];
-  /** HR and Leadership only: applications from elevate-x.in. */
+  /** Top four and the HR department only: applications from elevate-x.in. */
   applications: Application[];
   /** Core team: everyone. Members: the core team and themselves. */
   userById: Map<string, UserProfile>;
@@ -139,7 +139,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return [...m.values()].sort((x, y) => (y.createdAt?.getTime() ?? Date.now()) - (x.createdAt?.getTime() ?? Date.now()));
   }, [pollAll, pollPublic, pollDept, pollMe, pollMine]);
 
-  const [applications, ap1] = useLive<Application>(can.canSeeFeedback ? 'applications' : null, col('applications'), byCreatedDesc);
+  const [applications, ap1] = useLive<Application>(can.canReviewApplications ? 'applications' : null, col('applications'), byCreatedDesc);
 
   const tasks = useMemo(() => {
     const m = new Map<string, Task>();

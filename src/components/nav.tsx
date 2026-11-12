@@ -49,6 +49,8 @@ export function useNav() {
         { to: '/contributions', label: 'My credits', icon: <IconClock />, hint: 'Credits and history' },
         { to: '/hr', label: 'HR', icon: <IconChat />, count: hr, hint: can.canSeeFeedback ? 'Feedback, certificates, department requests' : 'Certificates, feedback, change department' },
         { to: '/profile', label: 'My profile', icon: <IconUser /> },
+        // HR members who aren't on the core team still review applications.
+        ...(!can.isCore && can.canReviewApplications ? [{ to: '/applications', label: 'Applications', icon: <IconInbox />, count: newApplications, hint: 'People who applied on elevate-x.in' }] : []),
       ],
     },
     ...(can.isCore
@@ -57,7 +59,7 @@ export function useNav() {
           items: [
             { to: '/review', label: 'Approvals', icon: <IconInbox />, count: approvals, hint: 'Drive proposals' },
             { to: '/members', label: 'People', icon: <IconUsers />, hint: 'Everyone at ElevateX' },
-            ...(can.canSeeFeedback ? [{ to: '/applications', label: 'Applications', icon: <IconInbox />, count: newApplications, hint: 'People who applied on elevate-x.in' }] : []),
+            ...(can.canReviewApplications ? [{ to: '/applications', label: 'Applications', icon: <IconInbox />, count: newApplications, hint: 'People who applied on elevate-x.in' }] : []),
             { to: '/analytics', label: 'Analytics', icon: <IconChart />, hint: 'Credits and drive scores' },
             { to: '/report', label: 'Monthly report', icon: <IconCalendar />, hint: 'Print-ready summary of a month' },
             ...(can.canRecordPast ? [{ to: '/record', label: 'Record past activity', icon: <IconClock />, hint: 'Add past drives, events and credits' }] : []),
